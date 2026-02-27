@@ -1,0 +1,430 @@
+.app-shell {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 2rem 1rem 3rem;
+}
+
+.app-shell h1,
+.app-shell h2,
+.app-shell h3 {
+  margin: 0;
+}
+
+.app-shell header p,
+.muted {
+  color: #6b7280;
+  margin: 0.3rem 0 0;
+}
+
+.error {
+  color: #b91c1c;
+  margin-top: 0.6rem;
+}
+
+.auth-bar {
+  margin-top: 0.6rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.panel {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 1rem;
+  margin-top: 1rem;
+}
+
+.layout {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 300px minmax(0, 1fr);
+}
+
+.habit-form {
+  display: flex;
+  gap: 0.75rem;
+  align-items: end;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
+.habit-form input[type='text'],
+.habit-form input:not([type]) {
+  min-width: 280px;
+}
+
+input,
+textarea,
+button {
+  font: inherit;
+}
+
+input,
+textarea {
+  border: 1px solid #cfd5df;
+  border-radius: 10px;
+  padding: 0.6rem 0.7rem;
+  background: #ffffff;
+}
+
+button {
+  border: 1px solid #2f80ed;
+  background: #2f80ed;
+  color: #ffffff;
+  border-radius: 10px;
+  padding: 0.55rem 0.9rem;
+  cursor: pointer;
+}
+
+button:hover {
+  filter: brightness(0.95);
+}
+
+.ghost {
+  border-color: #cbd5e1;
+  background: #ffffff;
+  color: #334155;
+}
+
+.danger {
+  border-color: #ef4444;
+  background: #ef4444;
+}
+
+.color-input {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.color-input input {
+  width: 44px;
+  height: 38px;
+  padding: 0;
+}
+
+.habit-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.8rem 0 0;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.habit-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+}
+
+.habit-item {
+  background: #f8fafc;
+  color: #0f172a;
+  border-color: #dbe4f1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.5rem;
+}
+
+.habit-item.active {
+  border-color: #2f80ed;
+}
+
+.habit-color {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+}
+
+.tracker-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.stats {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.stats span {
+  background: #eff6ff;
+  color: #1e3a8a;
+  border-radius: 99px;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.86rem;
+}
+
+.weekday-labels {
+  margin-top: 1rem;
+  display: grid;
+  grid-template-rows: repeat(7, 13px);
+  gap: 4px;
+  color: #64748b;
+  font-size: 0.7rem;
+  float: left;
+  width: 2rem;
+}
+
+.heatmap-area {
+  margin-left: 2.5rem;
+  margin-top: 1rem;
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+}
+
+.month-labels {
+  display: grid;
+  grid-template-columns: repeat(var(--heatmap-columns), 13px);
+  gap: 4px;
+  min-width: max-content;
+  margin-bottom: 0.4rem;
+  color: #64748b;
+  font-size: 0.7rem;
+}
+
+.month-labels span {
+  white-space: nowrap;
+}
+
+.heatmap-grid {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 13px;
+  grid-template-rows: repeat(7, 13px);
+  gap: 4px;
+  min-width: max-content;
+}
+
+.heatmap-cell {
+  position: relative;
+  width: 13px;
+  height: 13px;
+  border-radius: 4px;
+  border: 1px solid #dbe1ea;
+  background: #f1f5f9;
+  padding: 0;
+}
+
+.heatmap-cell.elapsed-empty {
+  background: #e5e7eb;
+  border-color: #d1d5db;
+}
+
+.heatmap-cell.done {
+  border-color: transparent;
+}
+
+.heatmap-cell.note {
+  box-shadow: inset 0 0 0 1px #0f172a;
+}
+
+.heatmap-cell.vision {
+  box-shadow: inset 0 0 0 1px #6d28d9;
+}
+
+.heatmap-cell.month-divider {
+  border-left-color: #94a3b8;
+}
+
+.heatmap-cell.today::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 6px;
+  border: 1px solid #0f172a;
+  pointer-events: none;
+  animation: today-cursor-fade 1.8s ease-in-out infinite;
+}
+
+@keyframes today-cursor-fade {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.heatmap-cell.placeholder {
+  background: transparent;
+  border: none;
+}
+
+.day-editor {
+  max-width: 580px;
+}
+
+.auth-panel {
+  max-width: 460px;
+}
+
+.auth-form {
+  margin-top: 0.8rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.inline-link {
+  border: none;
+  background: transparent;
+  color: #2563eb;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.check-row {
+  display: inline-flex;
+  gap: 0.55rem;
+  align-items: center;
+  margin-top: 0.8rem;
+}
+
+.notes {
+  margin-top: 0.9rem;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.notes textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.actions {
+  margin-top: 0.9rem;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.images-section {
+  margin-top: 1rem;
+}
+
+.images-section h4 {
+  margin: 0;
+}
+
+.image-upload-row {
+  margin-top: 0.6rem;
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.image-grid {
+  margin-top: 0.8rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.7rem;
+}
+
+.image-card {
+  margin: 0;
+  border: 1px solid #dbe4f1;
+  border-radius: 10px;
+  padding: 0.5rem;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.image-card img {
+  width: 100%;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+.image-card figcaption {
+  font-size: 0.8rem;
+  color: #475569;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vision-section {
+  margin-top: 1rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.vision-btn {
+  border-color: #8b5cf6;
+  background: #8b5cf6;
+}
+
+.heatmap-host {
+  margin-top: 1rem;
+  overflow-x: auto;
+}
+
+.tracker-heatmap div.title-bar {
+  display: none;
+}
+
+.tracker-heatmap div.map-contents-container {
+  margin-top: 0;
+}
+
+.tracker-heatmap div.map-contents-container div.map-contents div.map div.months div.month + div.month {
+  border-left: 1px solid #cbd5e1;
+  margin-left: 0.3rem;
+  padding-left: 0.3rem;
+}
+
+.tracker-heatmap div.map-contents-container div.map-contents div.map div.months div.month div.day-columns div.day-column div.day {
+  position: relative;
+  border-radius: 4px;
+  border: 1px solid #dbe1ea;
+  background: #f1f5f9 !important;
+}
+
+.tracker-heatmap div.map-contents-container div.map-contents div.map div.months div.month div.day-columns div.day-column div.day.pt-state-done {
+  border-color: transparent;
+  background: var(--habit-color) !important;
+}
+
+.tracker-heatmap div.map-contents-container div.map-contents div.map div.months div.month div.day-columns div.day-column div.day.pt-state-vision {
+  border-color: transparent;
+  background: var(--vision-color) !important;
+}
+
+.tracker-heatmap div.map-contents-container div.map-contents div.map div.months div.month div.day-columns div.day-column div.day.pt-state-both {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--habit-color) 0 50%, var(--vision-color) 50% 100%) !important;
+}
+
+.tracker-heatmap div.map-contents-container div.map-contents div.map div.months div.month div.day-columns div.day-column div.day.pt-elapsed-empty {
+  border-color: #d1d5db;
+  background: #e5e7eb !important;
+}
+
+.tracker-heatmap div.map-contents-container div.map-contents div.map div.months div.month div.day-columns div.day-column div.day.pt-note {
+  box-shadow: inset 0 0 0 1px #0f172a;
+}
+
+.tracker-heatmap div.map-contents-container div.map-contents div.map div.months div.month div.day-columns div.day-column div.day.pt-today::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 6px;
+  border: 1px solid #0f172a;
+  pointer-events: none;
+  animation: today-cursor-fade 1.8s ease-in-out infinite;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}
