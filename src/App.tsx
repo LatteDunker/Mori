@@ -1,7 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
-import { eachDayOfInterval, endOfYear, format, isAfter, parseISO, startOfYear, subDays } from 'date-fns'
-import 'jheat.js/dist/heat.esm.js'
-import 'jheat.js/dist/heat.js.css'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ChangeEvent, type FormEvent } from 'react'
+import { differenceInCalendarDays, eachDayOfInterval, endOfYear, format, isAfter, parseISO, startOfYear, subDays } from 'date-fns'
 import './App.css'
 
 type Habit = { id: string; userId?: string; name: string; color: string; createdAt: string }
@@ -43,30 +41,9 @@ type AuthUser = { id: string; email: string; createdAt: string }
 const CURRENT_YEAR = new Date().getFullYear()
 const TOKEN_STORAGE_KEY = 'progress-tracker:token'
 const VISION_COLOR = '#8b5cf6'
-const HEATMAP_BINDING_ID = 'progress-tracker-heatmap'
-
-type HeatInstance = {
-  render: (element: HTMLElement, options: Record<string, unknown>) => HeatInstance
-  destroy: (id: string) => HeatInstance
-  reset: (id: string, refresh?: boolean) => HeatInstance
-  addDate: (id: string, date: Date, trendType?: string | null, refresh?: boolean) => HeatInstance
-  refresh: (id: string) => HeatInstance
-}
-
-declare global {
-  interface Window {
-    $heat?: HeatInstance
-  }
-}
 
 const hasProgress = (entry: HabitEntry | undefined) =>
   Boolean(entry?.completed || entry?.note.trim() || Number(entry?.imageCount ?? 0) > 0)
-
-const heatDateToKey = (value: string) => {
-  const [day, month, year] = value.split('-')
-  if (!day || !month || !year) return null
-  return `${year}-${month}-${day}`
-}
 
 const apiCall = async <T,>(path: string, init?: RequestInit & { token?: string | null }): Promise<T> => {
   const headers = new Headers(init?.headers)
@@ -138,7 +115,6 @@ function App() {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_STORAGE_KEY))
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [apiError, setApiError] = useState<string | null>(null)
-  const heatmapRef = useRef<HTMLDivElement | null>(null)
 
   const activeHabitId = selectedHabitId ?? habits[0]?.id ?? null
   const selectedHabit = habits.find((habit) => habit.id === activeHabitId) ?? null
@@ -147,6 +123,18 @@ function App() {
   const yearDays = useMemo(
     () => eachDayOfInterval({ start: yearStart, end: endOfYear(yearStart) }),
     [yearStart],
+  )
+  const yearStartOffset = (yearStart.getDay() + 6) % 7
+  const heatmapColumns = Math.ceil((yearStartOffset + yearDays.length) / 7)
+  const monthMarkers = useMemo(
+    () =>
+      Array.from({ length: 12 }, (_, month) => {
+        const monthStart = new Date(CURRENT_YEAR, month, 1)
+        const dayIndex = differenceInCalendarDays(monthStart, yearStart)
+        const columnStart = Math.floor((yearStartOffset + dayIndex) / 7) + 1
+        return { label: format(monthStart, 'MMM'), columnStart, columnIndex: columnStart - 1 }
+      }),
+    [yearStart, yearStartOffset],
   )
   const entriesByDate = useMemo(() => {
     const map = new Map<string, HabitEntry>()
@@ -239,99 +227,6 @@ function App() {
     }
     void run()
   }, [activeHabitId, token, refreshYearData])
-
-  useEffect(() => {
-    const heat = window.$heat
-    const container = heatmapRef.current
-    if (!heat || !container || !selectedHabit) return
-
-    const onMapDayClick = (date: unknown) => {
-      if (!(date instanceof Date) || Number.isNaN(date.getTime())) return
-      void openDayEditor(format(date, 'yyyy-MM-dd'))
-    }
-
-    container.id = HEATMAP_BINDING_ID
-    heat.destroy(HEATMAP_BINDING_ID)
-    heat.render(container, {
-      defaultView: 'map',
-      startMonth: 0,
-      sideMenu: { enabled: false },
-      yearlyStatistics: { enabled: false },
-      title: {
-        showText: false,
-        showSectionText: false,
-        showYearSelector: true,
-        showYearSelectionDropDown: false,
-        showRefreshButton: false,
-        showExportButton: false,
-        showImportButton: false,
-        showClearButton: false,
-        showConfigurationButton: false,
-        showCurrentYearButton: false,
-      },
-      events: { onMapDayClick },
-      views: {
-        map: {
-          enabled: true,
-          showMonthNames: true,
-          placeMonthNamesOnTheBottom: false,
-          showMonthDayGaps: true,
-          showDayNames: true,
-          showMinimalDayNames: true,
-          showToolTips: true,
-          highlightCurrentDay: false,
-        },
-        line: { enabled: false },
-        chart: { enabled: false },
-        days: { enabled: false },
-        months: { enabled: false },
-        colorRanges: { enabled: false },
-      },
-    })
-
-    heat.reset(HEATMAP_BINDING_ID, false)
-    for (const day of yearDays) {
-      const key = format(day, 'yyyy-MM-dd')
-      const entry = entriesByDate.get(key)
-      const vision = visionsByDate.get(key)
-      if (hasProgress(entry) || vision) {
-        heat.addDate(HEATMAP_BINDING_ID, day, null, false)
-      }
-    }
-    heat.refresh(HEATMAP_BINDING_ID)
-
-    const heatDayCells = container.querySelectorAll<HTMLDivElement>('div.day[data-heat-js-map-date]')
-    for (const cell of heatDayCells) {
-      const heatDate = cell.getAttribute('data-heat-js-map-date')
-      if (!heatDate) continue
-      const key = heatDateToKey(heatDate)
-      if (!key) continue
-
-      const entry = entriesByDate.get(key)
-      const vision = visionsByDate.get(key)
-      const done = hasProgress(entry)
-      const hasEntryDetail = Boolean(entry?.note.trim() || Number(entry?.imageCount ?? 0) > 0)
-      const hasVisionDetail = Boolean(vision?.imageCount || vision?.description?.trim())
-      const isToday = key === todayKey
-      const isPastWithoutProgress = key < todayKey && !done && !vision
-
-      cell.classList.toggle('pt-state-done', done && !vision)
-      cell.classList.toggle('pt-state-vision', !done && Boolean(vision))
-      cell.classList.toggle('pt-state-both', done && Boolean(vision))
-      cell.classList.toggle('pt-note', hasEntryDetail || hasVisionDetail)
-      cell.classList.toggle('pt-elapsed-empty', isPastWithoutProgress)
-      cell.classList.toggle('pt-today', isToday)
-      cell.setAttribute('title', `${format(parseISO(key), 'MMM d')}${done ? ' - progress' : ''}${vision ? ' - vision' : ''}`)
-    }
-
-    container.style.setProperty('--habit-color', selectedHabit.color)
-    container.style.setProperty('--vision-color', VISION_COLOR)
-    container.classList.add('tracker-heatmap')
-
-    return () => {
-      heat.destroy(HEATMAP_BINDING_ID)
-    }
-  }, [selectedHabit, yearDays, entriesByDate, visionsByDate, todayKey])
 
   const handleAuthSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -692,7 +587,49 @@ function App() {
                       <span>{stats.longestStreak} best streak</span>
                     </div>
                   </div>
-                  <div ref={heatmapRef} className="heatmap-host" />
+                  <div className="weekday-labels">
+                    <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
+                  </div>
+                  <div className="heatmap-area">
+                    <div className="month-labels" style={{ '--heatmap-columns': heatmapColumns } as CSSProperties}>
+                      {monthMarkers.map((marker) => (
+                        <span key={marker.label} style={{ gridColumnStart: marker.columnStart }}>
+                          {marker.label}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="heatmap-grid">
+                      {Array.from({ length: yearStartOffset }).map((_, index) => <div key={`empty-${index}`} className="heatmap-cell placeholder" />)}
+                      {yearDays.map((day) => {
+                        const key = format(day, 'yyyy-MM-dd')
+                        const entry = entriesByDate.get(key)
+                        const vision = visionsByDate.get(key)
+                        const done = hasProgress(entry)
+                        const isToday = key === todayKey
+                        const isPastWithoutProgress = key < todayKey && !done && !vision
+                        const hasEntryDetail = Boolean(entry?.note.trim() || Number(entry?.imageCount ?? 0) > 0)
+                        const hasVisionDetail = Boolean(vision?.imageCount || vision?.description?.trim())
+                        let style: CSSProperties | undefined
+                        if (done && vision) {
+                          style = { background: `linear-gradient(135deg, ${selectedHabit.color} 0 50%, ${VISION_COLOR} 50% 100%)` }
+                        } else if (done) {
+                          style = { backgroundColor: selectedHabit.color }
+                        } else if (vision) {
+                          style = { backgroundColor: VISION_COLOR }
+                        }
+                        return (
+                          <button
+                            key={key}
+                            type="button"
+                            className={`heatmap-cell ${done ? 'done' : ''} ${vision ? 'vision' : ''} ${hasEntryDetail || hasVisionDetail ? 'note' : ''} ${isPastWithoutProgress ? 'elapsed-empty' : ''} ${isToday ? 'today' : ''}`}
+                            style={style}
+                            onClick={() => openDayEditor(key)}
+                            title={`${format(day, 'MMM d')}${done ? ' - progress' : ''}${vision ? ' - vision' : ''}`}
+                          />
+                        )
+                      })}
+                    </div>
+                  </div>
                 </>
               ) : null}
             </section>

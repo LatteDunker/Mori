@@ -1,8 +1,13 @@
 Grey out days that have already passed that have no progress for visual indication of how much of the year has passed.
-A small indicator signaling the current day for visual clarity
+A small indicator signaling the current day for time awareness
 A calendar view similar to the sidebar calendar on Google Calendar so I can see the number for each day of the month
 Month legend on the X axis at the top
 Optional month separator lines for visual chunking
 
 
 Edit habit names, colors from habit title (pen edit icon)
+
+Be able to add events under multiple habits. When trying to delete, ask if you want to remove from this habit or remove from all habits.
+Add multiple events for a day.
+
+Rearrange order of habits in display.

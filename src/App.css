@@ -229,10 +229,6 @@ button:hover {
   box-shadow: inset 0 0 0 1px #6d28d9;
 }
 
-.heatmap-cell.month-divider {
-  border-left-color: #94a3b8;
-}
-
 .heatmap-cell.today::after {
   content: '';
   position: absolute;
@@ -361,66 +357,6 @@ button:hover {
 .vision-btn {
   border-color: #8b5cf6;
   background: #8b5cf6;
-}
-
-.heatmap-host {
-  margin-top: 1rem;
-  overflow-x: auto;
-}
-
-.tracker-heatmap div.title-bar {
-  display: none;
-}
-
-.tracker-heatmap div.map-contents-container {
-  margin-top: 0;
-}
-
-.tracker-heatmap div.map-contents-container div.map-contents div.map div.months div.month + div.month {
-  border-left: 1px solid #cbd5e1;
-  margin-left: 0.3rem;
-  padding-left: 0.3rem;
-}
-
-.tracker-heatmap div.map-contents-container div.map-contents div.map div.months div.month div.day-columns div.day-column div.day {
-  position: relative;
-  border-radius: 4px;
-  border: 1px solid #dbe1ea;
-  background: #f1f5f9 !important;
-}
-
-.tracker-heatmap div.map-contents-container div.map-contents div.map div.months div.month div.day-columns div.day-column div.day.pt-state-done {
-  border-color: transparent;
-  background: var(--habit-color) !important;
-}
-
-.tracker-heatmap div.map-contents-container div.map-contents div.map div.months div.month div.day-columns div.day-column div.day.pt-state-vision {
-  border-color: transparent;
-  background: var(--vision-color) !important;
-}
-
-.tracker-heatmap div.map-contents-container div.map-contents div.map div.months div.month div.day-columns div.day-column div.day.pt-state-both {
-  border-color: transparent;
-  background: linear-gradient(135deg, var(--habit-color) 0 50%, var(--vision-color) 50% 100%) !important;
-}
-
-.tracker-heatmap div.map-contents-container div.map-contents div.map div.months div.month div.day-columns div.day-column div.day.pt-elapsed-empty {
-  border-color: #d1d5db;
-  background: #e5e7eb !important;
-}
-
-.tracker-heatmap div.map-contents-container div.map-contents div.map div.months div.month div.day-columns div.day-column div.day.pt-note {
-  box-shadow: inset 0 0 0 1px #0f172a;
-}
-
-.tracker-heatmap div.map-contents-container div.map-contents div.map div.months div.month div.day-columns div.day-column div.day.pt-today::after {
-  content: '';
-  position: absolute;
-  inset: -2px;
-  border-radius: 6px;
-  border: 1px solid #0f172a;
-  pointer-events: none;
-  animation: today-cursor-fade 1.8s ease-in-out infinite;
 }
 
 @media (max-width: 900px) {
