@@ -144,9 +144,6 @@ function App() {
   const [draftNote, setDraftNote] = useState('')
   const [draftVisionTitle, setDraftVisionTitle] = useState('')
   const [draftVisionDescription, setDraftVisionDescription] = useState('')
-  const [visionDate, setVisionDate] = useState(format(new Date(), 'yyyy-MM-dd'))
-  const [visionTitle, setVisionTitle] = useState('')
-  const [visionDescription, setVisionDescription] = useState('')
   const [dayImages, setDayImages] = useState<StoredImage[]>([])
   const [visionImages, setVisionImages] = useState<StoredImage[]>([])
   const [selectedImageFile, setSelectedImageFile] = useState<File | null>(null)
@@ -512,26 +509,6 @@ function App() {
     }
   }
 
-  const createVisionFromForm = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!activeHabitId || !token) return
-    const title = visionTitle.trim()
-    if (!title || !visionDate) return
-    try {
-      await apiCall<{ vision: Vision }>(`/api/habits/${activeHabitId}/visions/${visionDate}`, {
-        method: 'PUT',
-        token,
-        body: JSON.stringify({ title, description: visionDescription.trim() }),
-      })
-      setVisionTitle('')
-      setVisionDescription('')
-      await refreshYearData(activeHabitId, token)
-      setApiError(null)
-    } catch (error) {
-      setApiError(error instanceof Error ? error.message : 'Unable to create vision')
-    }
-  }
-
   const uploadEntryImage = async () => {
     if (!token || !activeHabitId || !selectedDate || !selectedImageFile) return
     try {
@@ -619,19 +596,21 @@ function App() {
     <main className="app-shell">
       <nav className="top-nav">
         <span className="top-nav-title">Progress Tracker</span>
-        <button type="button" className="ghost theme-toggle" onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}>
-          {theme === 'dark' ? 'Switch to light' : 'Switch to dark'}
-        </button>
+        <div className="top-nav-right">
+          {authUser ? (
+            <div className="auth-bar">
+              <span>{authUser.email}</span>
+              <button type="button" className="ghost" onClick={logout}>
+                Logout
+              </button>
+            </div>
+          ) : null}
+          <button type="button" className="ghost theme-toggle" onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}>
+            {theme === 'dark' ? 'Switch to light' : 'Switch to dark'}
+          </button>
+        </div>
       </nav>
       <header>
-        {authUser ? (
-          <div className="auth-bar">
-            <span>{authUser.email}</span>
-            <button type="button" className="ghost" onClick={logout}>
-              Logout
-            </button>
-          </div>
-        ) : null}
         {apiError ? <p className="error">{apiError}</p> : null}
       </header>
 
@@ -675,18 +654,6 @@ function App() {
               <button type="submit">Add habit</button>
             </form>
           </section>
-
-          {selectedHabit ? (
-            <section className="panel">
-              <h2>Create vision milestone</h2>
-              <form className="habit-form" onSubmit={createVisionFromForm}>
-                <input type="date" value={visionDate} onChange={(event) => setVisionDate(event.target.value)} />
-                <input value={visionTitle} onChange={(event) => setVisionTitle(event.target.value)} placeholder="Vision title" />
-                <input value={visionDescription} onChange={(event) => setVisionDescription(event.target.value)} placeholder="Description (optional)" />
-                <button type="submit">Save vision</button>
-              </form>
-            </section>
-          ) : null}
 
           <section className="layout">
             <aside className="panel habits-panel">

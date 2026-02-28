@@ -4,16 +4,15 @@ A calendar view similar to the sidebar calendar on Google Calendar so I can see 
 Month legend on the X axis at the top
 Optional month separator lines for visual chunking
 
-
-Edit habit names, colors from habit title (pen edit icon)
-
 Be able to add events under multiple habits. When trying to delete, ask if you want to remove from this habit or remove from all habits.
 Add multiple events for a day.
 
-Rearrange order of habits in display.
 
 
 
 
 Change log:
+02/27/26
 + Dark theme.
++ Drag habits to reorder
++ Edit habit (name + color)
