@@ -187,15 +187,6 @@ export const initSchema = async () => {
   await addColumnIfMissing('users', 'profile_image_url VARCHAR(512) NULL AFTER password_hash')
   await addColumnIfMissing('users', 'profile_image_storage_key VARCHAR(255) NULL AFTER profile_image_url')
   await addColumnIfMissing('habit_entries', 'user_id CHAR(36) NULL AFTER id')
-
-  await db.query(
-    `UPDATE habits h
-     JOIN (
-       SELECT id, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC) - 1 AS next_order
-       FROM habits
-     ) ranked ON ranked.id = h.id
-     SET h.sort_order = ranked.next_order`,
-  )
 }
 
 export const createUser = async ({ email, passwordHash }) => {
