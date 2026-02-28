@@ -40,6 +40,7 @@ type AuthUser = { id: string; email: string; createdAt: string }
 
 const CURRENT_YEAR = new Date().getFullYear()
 const TOKEN_STORAGE_KEY = 'progress-tracker:token'
+const THEME_STORAGE_KEY = 'progress-tracker:theme'
 const VISION_COLOR = '#8b5cf6'
 
 const hasProgress = (entry: HabitEntry | undefined) =>
@@ -113,6 +114,11 @@ function App() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_STORAGE_KEY))
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const storedTheme = localStorage.getItem(THEME_STORAGE_KEY)
+    if (storedTheme === 'light' || storedTheme === 'dark') return storedTheme
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  })
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [apiError, setApiError] = useState<string | null>(null)
 
@@ -182,6 +188,11 @@ function App() {
     if (token) localStorage.setItem(TOKEN_STORAGE_KEY, token)
     else localStorage.removeItem(TOKEN_STORAGE_KEY)
   }, [token])
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem(THEME_STORAGE_KEY, theme)
+  }, [theme])
 
   useEffect(() => {
     const run = async () => {
@@ -482,6 +493,12 @@ function App() {
 
   return (
     <main className="app-shell">
+      <nav className="top-nav">
+        <span className="top-nav-title">Progress Tracker</span>
+        <button type="button" className="ghost theme-toggle" onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}>
+          {theme === 'dark' ? 'Switch to light' : 'Switch to dark'}
+        </button>
+      </nav>
       <header>
         <h1>Progress Tracker</h1>
         <p>Track consistency by habit, one day at a time.</p>
