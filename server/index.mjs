@@ -29,6 +29,7 @@ import {
   reorderHabits,
   revokeToken,
   addEntryImage,
+  updateHabit,
   upsertVision,
   upsertEntry,
 } from './repository.mjs'
@@ -149,6 +150,19 @@ export const createApp = () => {
     const habits = await reorderHabits({ userId: req.auth.userId, habitIds })
     if (!habits) return res.status(400).json({ message: 'habitIds must match your current habits exactly' })
     return res.json({ habits })
+  })
+
+  app.patch('/api/habits/:habitId', requireAuth, async (req, res) => {
+    const name = String(req.body?.name ?? '').trim()
+    const color = String(req.body?.color ?? '').trim() || '#2f80ed'
+    if (!name) return res.status(400).json({ message: 'Habit name is required' })
+    const habit = await updateHabit({ userId: req.auth.userId, habitId: req.params.habitId, name, color })
+    if (!habit) {
+      console.log('[PATCH /api/habits/:habitId] habit not found or not updated', { habitId: req.params.habitId, name, color })
+      return res.status(404).json({ message: 'Habit not found' })
+    }
+    console.log('[PATCH /api/habits/:habitId] updated', { habitId: habit.id, name: habit.name, color: habit.color })
+    return res.json({ habit })
   })
 
   app.delete('/api/habits/:habitId', requireAuth, async (req, res) => {
@@ -340,6 +354,11 @@ export const createApp = () => {
     return res.status(204).send()
   })
 
+  app.use((req, res) => {
+    console.log('[API] 404', req.method, req.url)
+    res.status(404).json({ message: 'Not found', path: req.url, method: req.method })
+  })
+
   app.use((err, _req, res, _next) => {
     if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
       return res.status(413).json({ message: 'Image exceeds 8MB limit' })
@@ -364,6 +383,7 @@ export const startServer = async ({ port = config.apiPort, log = true } = {}) =>
   const actualPort = server.address()?.port ?? port
   if (log) {
     console.log(`API ready on http://localhost:${actualPort}`)
+    console.log('Routes: PATCH /api/habits/:habitId (update habit) registered')
   }
   return { app, server, port: actualPort }
 }

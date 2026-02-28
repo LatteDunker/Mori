@@ -324,6 +324,25 @@ export const reorderHabits = async ({ userId, habitIds }) => {
   return updatedRows.map(toHabit)
 }
 
+export const updateHabit = async ({ userId, habitId, name, color }) => {
+  const db = await getDb()
+  const trimmedName = String(name ?? '').trim()
+  const trimmedColor = String(color ?? '').trim()
+  if (!trimmedName) return null
+
+  const [result] = await db.query(
+    'UPDATE habits SET name = ?, color = ? WHERE id = ? AND user_id = ?',
+    [trimmedName, trimmedColor || '#2f80ed', habitId, userId],
+  )
+  if (result.affectedRows === 0) return null
+
+  const [rows] = await db.query(
+    'SELECT id, user_id, name, color, sort_order, created_at FROM habits WHERE id = ? AND user_id = ? LIMIT 1',
+    [habitId, userId],
+  )
+  return rows[0] ? toHabit(rows[0]) : null
+}
+
 export const deleteHabit = async ({ userId, habitId }) => {
   const db = await getDb()
   const [result] = await db.query('DELETE FROM habits WHERE id = ? AND user_id = ?', [habitId, userId])

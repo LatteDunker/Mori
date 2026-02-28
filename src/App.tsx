@@ -135,6 +135,10 @@ function App() {
   const [selectedHabitId, setSelectedHabitId] = useState<string | null>(null)
   const [habitName, setHabitName] = useState('')
   const [habitColor, setHabitColor] = useState('#2f80ed')
+  const [editingHabitId, setEditingHabitId] = useState<string | null>(null)
+  const [editingHabitName, setEditingHabitName] = useState('')
+  const [editingHabitColor, setEditingHabitColor] = useState('#2f80ed')
+  const [updatingHabit, setUpdatingHabit] = useState(false)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [draftCompleted, setDraftCompleted] = useState(false)
   const [draftNote, setDraftNote] = useState('')
@@ -167,6 +171,7 @@ function App() {
 
   const activeHabitId = selectedHabitId ?? habits[0]?.id ?? null
   const selectedHabit = habits.find((habit) => habit.id === activeHabitId) ?? null
+  const editingHabit = habits.find((habit) => habit.id === editingHabitId) ?? null
   const yearStart = startOfYear(new Date(CURRENT_YEAR, 0, 1))
   const todayKey = format(new Date(), 'yyyy-MM-dd')
   const yearDays = useMemo(
@@ -358,6 +363,41 @@ function App() {
       setApiError(null)
     } catch (error) {
       setApiError(error instanceof Error ? error.message : 'Unable to delete habit')
+    }
+  }
+
+  const openEditHabitModal = useCallback((habit: Habit) => {
+    setEditingHabitId(habit.id)
+    setEditingHabitName(habit.name)
+    setEditingHabitColor(habit.color)
+  }, [])
+
+  const closeEditHabitModal = useCallback(() => {
+    setEditingHabitId(null)
+    setEditingHabitName('')
+    setEditingHabitColor('#2f80ed')
+    setUpdatingHabit(false)
+  }, [])
+
+  const saveHabitUpdates = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!token || !editingHabitId) return
+    const name = editingHabitName.trim()
+    if (!name) return
+
+    try {
+      setUpdatingHabit(true)
+      await apiCall<{ habit: Habit }>(`/api/habits/${editingHabitId}`, {
+        method: 'PATCH',
+        token,
+        body: JSON.stringify({ name, color: editingHabitColor }),
+      })
+      await refreshHabitsWithToken(token)
+      setApiError(null)
+      closeEditHabitModal()
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'Unable to update habit')
+      setUpdatingHabit(false)
     }
   }
 
@@ -584,8 +624,6 @@ function App() {
         </button>
       </nav>
       <header>
-        <h1>Progress Tracker</h1>
-        <p>Track consistency by habit, one day at a time.</p>
         {authUser ? (
           <div className="auth-bar">
             <span>{authUser.email}</span>
@@ -681,7 +719,12 @@ function App() {
                 <>
                   <div className="tracker-header">
                     <div>
-                      <h2>{selectedHabit.name}</h2>
+                      <div className="habit-title-row">
+                        <h2>{selectedHabit.name}</h2>
+                        <button type="button" className="ghost icon-btn" onClick={() => openEditHabitModal(selectedHabit)} aria-label={`Edit ${selectedHabit.name}`}>
+                          <span aria-hidden="true">✎</span>
+                        </button>
+                      </div>
                       <p>{CURRENT_YEAR} view</p>
                     </div>
                     <div className="stats">
@@ -807,6 +850,33 @@ function App() {
             </section>
           ) : null}
         </>
+      ) : null}
+
+      {editingHabit ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="panel modal-panel" role="dialog" aria-modal="true" aria-label={`Edit ${editingHabit.name}`}>
+            <div className="modal-header">
+              <h3>Edit habit</h3>
+              <button type="button" className="ghost icon-btn" onClick={closeEditHabitModal} aria-label="Close edit habit modal">
+                <span aria-hidden="true">×</span>
+              </button>
+            </div>
+            <form className="modal-form" onSubmit={saveHabitUpdates}>
+              <label className="notes">
+                Habit name
+                <input value={editingHabitName} onChange={(event) => setEditingHabitName(event.target.value)} placeholder="Habit name" required />
+              </label>
+              <label className="color-input">
+                Color
+                <input type="color" value={editingHabitColor} onChange={(event) => setEditingHabitColor(event.target.value)} aria-label="Habit color" />
+              </label>
+              <div className="actions">
+                <button type="submit" disabled={updatingHabit}>{updatingHabit ? 'Saving...' : 'Save changes'}</button>
+                <button type="button" className="ghost" onClick={closeEditHabitModal}>Cancel</button>
+              </div>
+            </form>
+          </section>
+        </div>
       ) : null}
     </main>
   )

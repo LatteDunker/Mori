@@ -278,6 +278,22 @@ button:hover {
   gap: 1rem;
 }
 
+.habit-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.icon-btn {
+  width: 2rem;
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .stats {
   display: inline-flex;
   flex-wrap: wrap;
@@ -489,6 +505,36 @@ button:hover {
 .vision-btn {
   border-color: #8b5cf6;
   background: #8b5cf6;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgb(15 23 42 / 30%);
+  backdrop-filter: blur(7px);
+  -webkit-backdrop-filter: blur(7px);
+  display: grid;
+  place-items: center;
+  z-index: 50;
+  padding: 1rem;
+}
+
+.modal-panel {
+  margin-top: 0;
+  width: min(460px, 100%);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.modal-form {
+  margin-top: 0.85rem;
+  display: grid;
+  gap: 0.8rem;
 }
 
 @media (max-width: 900px) {

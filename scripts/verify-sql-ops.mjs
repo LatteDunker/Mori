@@ -23,6 +23,7 @@ import {
   listVisionsForYear,
   reorderHabits,
   revokeToken,
+  updateHabit,
   upsertVision,
   upsertEntry,
 } from '../server/repository.mjs'
@@ -105,6 +106,18 @@ const runRepositoryChecks = async () => {
       reorderedHabits[1]?.id === habit.id,
     'reorderHabits should persist the new sort order',
     reorderedHabits,
+  )
+
+  const updatedHabit = await updateHabit({
+    userId: user.id,
+    habitId: habit.id,
+    name: 'Repo Habit Updated',
+    color: '#f97316',
+  })
+  assert(
+    updatedHabit?.id === habit.id && updatedHabit?.name === 'Repo Habit Updated' && updatedHabit?.color === '#f97316',
+    'updateHabit should update habit name and color',
+    updatedHabit,
   )
 
   const firstEntry = await upsertEntry({
@@ -301,6 +314,20 @@ const runEndpointChecks = async () => {
         habitsAfterReorder.payload.habits[1]?.id === habitId,
       'list habits should preserve persisted reorder',
       habitsAfterReorder,
+    )
+
+    const updateHabitResponse = await request(baseUrl, `/api/habits/${habitId}`, {
+      method: 'PATCH',
+      token,
+      body: { name: 'API Habit Updated', color: '#f97316' },
+    })
+    assert(
+      updateHabitResponse.status === 200 &&
+        updateHabitResponse.payload?.habit?.id === habitId &&
+        updateHabitResponse.payload?.habit?.name === 'API Habit Updated' &&
+        updateHabitResponse.payload?.habit?.color === '#f97316',
+      'update habit endpoint should return updated habit',
+      updateHabitResponse,
     )
 
     const upsertA = await request(baseUrl, `/api/habits/${habitId}/entries/${dateA}`, {

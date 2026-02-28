@@ -11,3 +11,9 @@ Be able to add events under multiple habits. When trying to delete, ask if you w
 Add multiple events for a day.
 
 Rearrange order of habits in display.
+
+
+
+
+Change log:
++ Dark theme.
