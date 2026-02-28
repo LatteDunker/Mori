@@ -8,6 +8,13 @@ Be able to add events under multiple habits. When trying to delete, ask if you w
 Add multiple events for a day.
 
 
+A single day can contain multiple habit events.
+A single habit event can belong to multiple habits.
+
+
+
+
+
 
 
 

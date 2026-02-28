@@ -7,6 +7,7 @@ import {
   addVisionImage,
   createHabit,
   createUser,
+  clearUserProfileImage,
   deleteEntryImage,
   deleteVision,
   deleteVisionImage,
@@ -14,6 +15,7 @@ import {
   deleteEntry,
   deleteHabit,
   findUserByEmail,
+  findUserById,
   initSchema,
   isTokenRevoked,
   listEntryImages,
@@ -23,6 +25,7 @@ import {
   listVisionsForYear,
   reorderHabits,
   revokeToken,
+  setUserProfileImage,
   updateHabit,
   upsertVision,
   upsertEntry,
@@ -87,6 +90,19 @@ const runRepositoryChecks = async () => {
 
   const foundUser = await findUserByEmail(repoEmail)
   assert(foundUser?.id === user.id, 'findUserByEmail should return created user', { foundUser, user })
+
+  const profileSet = await setUserProfileImage({
+    userId: user.id,
+    storageKey: 'repo-profile.png',
+    url: '/uploads/repo-profile.png',
+  })
+  assert(profileSet?.user?.profileImageUrl === '/uploads/repo-profile.png', 'setUserProfileImage should persist profile url', profileSet)
+
+  const userAfterProfileSet = await findUserById(user.id)
+  assert(userAfterProfileSet?.profileImageStorageKey === 'repo-profile.png', 'findUserById should include profile image metadata', userAfterProfileSet)
+
+  const profileCleared = await clearUserProfileImage(user.id)
+  assert(profileCleared?.user?.profileImageUrl === null, 'clearUserProfileImage should remove profile image', profileCleared)
 
   const habit = await createHabit({ userId: user.id, name: 'Repo Habit', color: '#1d4ed8' })
   const secondHabit = await createHabit({ userId: user.id, name: 'Repo Habit Two', color: '#16a34a' })
@@ -273,6 +289,40 @@ const runEndpointChecks = async () => {
 
     const me = await request(baseUrl, '/api/auth/me', { token: signupToken })
     assert(me.status === 200 && me.payload?.user?.email === email, 'auth/me should return current user', me)
+
+    const profileImageForm = new FormData()
+    profileImageForm.append('image', new Blob(['profile'], { type: 'image/png' }), 'profile.png')
+    const uploadProfileImageResponse = await request(baseUrl, '/api/auth/profile-image', {
+      method: 'POST',
+      token,
+      body: profileImageForm,
+    })
+    assert(
+      uploadProfileImageResponse.status === 200 &&
+        typeof uploadProfileImageResponse.payload?.user?.profileImageUrl === 'string' &&
+        uploadProfileImageResponse.payload.user.profileImageUrl.startsWith('/uploads/'),
+      'profile image upload endpoint should return user with profileImageUrl',
+      uploadProfileImageResponse,
+    )
+
+    const meAfterProfileUpload = await request(baseUrl, '/api/auth/me', { token })
+    assert(
+      meAfterProfileUpload.status === 200 &&
+        typeof meAfterProfileUpload.payload?.user?.profileImageUrl === 'string' &&
+        meAfterProfileUpload.payload.user.profileImageUrl.startsWith('/uploads/'),
+      'auth/me should include profileImageUrl after upload',
+      meAfterProfileUpload,
+    )
+
+    const deleteProfileImageResponse = await request(baseUrl, '/api/auth/profile-image', {
+      method: 'DELETE',
+      token,
+    })
+    assert(
+      deleteProfileImageResponse.status === 200 && deleteProfileImageResponse.payload?.user?.profileImageUrl === null,
+      'delete profile image endpoint should clear profileImageUrl',
+      deleteProfileImageResponse,
+    )
 
     const createdHabit = await request(baseUrl, '/api/habits', {
       method: 'POST',

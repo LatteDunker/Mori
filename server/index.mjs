@@ -12,6 +12,7 @@ import {
   addVisionImage,
   createHabit,
   createUser,
+  clearUserProfileImage,
   deleteEntry,
   deleteEntryImage,
   deleteHabit,
@@ -28,6 +29,7 @@ import {
   listVisionsForYear,
   reorderHabits,
   revokeToken,
+  setUserProfileImage,
   addEntryImage,
   updateHabit,
   upsertVision,
@@ -63,6 +65,7 @@ const buildUploadMiddleware = () =>
 const sanitizeUser = (user) => ({
   id: user.id,
   email: user.email,
+  profileImageUrl: user.profileImageUrl ?? null,
   createdAt: user.createdAt,
 })
 
@@ -127,6 +130,31 @@ export const createApp = () => {
       expiresAt: expDate,
     })
     return res.status(204).send()
+  })
+
+  app.post('/api/auth/profile-image', requireAuth, upload.single('image'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ message: 'Image file is required' })
+    const result = await setUserProfileImage({
+      userId: req.auth.userId,
+      storageKey: req.file.filename,
+      url: `/uploads/${req.file.filename}`,
+    })
+    if (!result) return res.status(404).json({ message: 'User not found' })
+    if (result.previousStorageKey && result.previousStorageKey !== req.file.filename) {
+      await fs.unlink(path.join(uploadsDir, result.previousStorageKey)).catch(() => {})
+    }
+    console.log('[POST /api/auth/profile-image] updated', { userId: req.auth.userId, url: result.user.profileImageUrl })
+    return res.json({ user: sanitizeUser(result.user) })
+  })
+
+  app.delete('/api/auth/profile-image', requireAuth, async (req, res) => {
+    const result = await clearUserProfileImage(req.auth.userId)
+    if (!result) return res.status(404).json({ message: 'User not found' })
+    if (result.previousStorageKey) {
+      await fs.unlink(path.join(uploadsDir, result.previousStorageKey)).catch(() => {})
+    }
+    console.log('[DELETE /api/auth/profile-image] cleared', { userId: req.auth.userId })
+    return res.json({ user: sanitizeUser(result.user) })
   })
 
   app.get('/api/habits', requireAuth, async (req, res) => {

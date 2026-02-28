@@ -3,6 +3,7 @@ import { differenceInCalendarDays, eachDayOfInterval, endOfYear, format, isAfter
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import Cropper, { type Area } from 'react-easy-crop'
 import './App.css'
 
 type Habit = { id: string; userId?: string; name: string; color: string; sortOrder?: number; createdAt: string }
@@ -39,7 +40,7 @@ type StoredImage = {
   fileSize: number
   createdAt: string
 }
-type AuthUser = { id: string; email: string; createdAt: string }
+type AuthUser = { id: string; email: string; profileImageUrl?: string | null; createdAt: string }
 
 const CURRENT_YEAR = new Date().getFullYear()
 const TOKEN_STORAGE_KEY = 'progress-tracker:token'
@@ -48,6 +49,48 @@ const VISION_COLOR = '#8b5cf6'
 
 const hasProgress = (entry: HabitEntry | undefined) =>
   Boolean(entry?.completed || entry?.note.trim() || Number(entry?.imageCount ?? 0) > 0)
+
+const loadImageFromUrl = (source: string) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = reject
+    image.src = source
+  })
+
+const getCroppedImageBlob = async (source: string, cropAreaPixels: Area) => {
+  const image = await loadImageFromUrl(source)
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('Canvas is not supported in this browser')
+
+  const width = Math.max(1, Math.round(cropAreaPixels.width))
+  const height = Math.max(1, Math.round(cropAreaPixels.height))
+  canvas.width = width
+  canvas.height = height
+
+  ctx.drawImage(
+    image,
+    Math.round(cropAreaPixels.x),
+    Math.round(cropAreaPixels.y),
+    width,
+    height,
+    0,
+    0,
+    width,
+    height,
+  )
+
+  return await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error('Failed to crop image'))
+        return
+      }
+      resolve(blob)
+    }, 'image/jpeg', 0.92)
+  })
+}
 
 const apiCall = async <T,>(path: string, init?: RequestInit & { token?: string | null }): Promise<T> => {
   const headers = new Headers(init?.headers)
@@ -150,6 +193,13 @@ function App() {
   const [selectedVisionImageFile, setSelectedVisionImageFile] = useState<File | null>(null)
   const [uploadingImage, setUploadingImage] = useState(false)
   const [uploadingVisionImage, setUploadingVisionImage] = useState(false)
+  const [profileModalOpen, setProfileModalOpen] = useState(false)
+  const [profileCropSource, setProfileCropSource] = useState<string | null>(null)
+  const [profileCrop, setProfileCrop] = useState({ x: 0, y: 0 })
+  const [profileZoom, setProfileZoom] = useState(1)
+  const [profileCropPixels, setProfileCropPixels] = useState<Area | null>(null)
+  const [uploadingProfileImage, setUploadingProfileImage] = useState(false)
+  const [removingProfileImage, setRemovingProfileImage] = useState(false)
   const [loadingHabits, setLoadingHabits] = useState(true)
   const [loadingYearData, setLoadingYearData] = useState(false)
   const [authLoading, setAuthLoading] = useState(true)
@@ -244,6 +294,13 @@ function App() {
     localStorage.setItem(THEME_STORAGE_KEY, theme)
   }, [theme])
 
+  useEffect(
+    () => () => {
+      if (profileCropSource) URL.revokeObjectURL(profileCropSource)
+    },
+    [profileCropSource],
+  )
+
   useEffect(() => {
     const run = async () => {
       if (!token) {
@@ -325,7 +382,74 @@ function App() {
       setVisions([])
       setSelectedHabitId(null)
       setSelectedDate(null)
+      setProfileModalOpen(false)
+      setProfileCropSource(null)
       setApiError(null)
+    }
+  }
+
+  const openProfileModal = useCallback(() => {
+    setProfileModalOpen(true)
+  }, [])
+
+  const closeProfileModal = useCallback(() => {
+    setProfileModalOpen(false)
+    setProfileCropSource(null)
+    setProfileCropPixels(null)
+    setProfileZoom(1)
+  }, [])
+
+  const handleProfileFileSelection = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    const objectUrl = URL.createObjectURL(file)
+    setProfileCropSource(objectUrl)
+    setProfileCrop({ x: 0, y: 0 })
+    setProfileZoom(1)
+    setProfileCropPixels(null)
+    event.target.value = ''
+  }
+
+  const uploadProfileImage = async () => {
+    if (!token || !profileCropSource || !profileCropPixels) return
+    try {
+      setUploadingProfileImage(true)
+      const croppedBlob = await getCroppedImageBlob(profileCropSource, profileCropPixels)
+      const formData = new FormData()
+      formData.append('image', new File([croppedBlob], 'profile-image.jpg', { type: croppedBlob.type || 'image/jpeg' }))
+      const data = await apiCall<{ user: AuthUser }>('/api/auth/profile-image', {
+        method: 'POST',
+        token,
+        body: formData,
+      })
+      setAuthUser(data.user)
+      setProfileCropSource(null)
+      setProfileCropPixels(null)
+      setProfileZoom(1)
+      setApiError(null)
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'Unable to upload profile image')
+    } finally {
+      setUploadingProfileImage(false)
+    }
+  }
+
+  const removeProfileImage = async () => {
+    if (!token) return
+    try {
+      setRemovingProfileImage(true)
+      const data = await apiCall<{ user: AuthUser }>('/api/auth/profile-image', {
+        method: 'DELETE',
+        token,
+      })
+      setAuthUser(data.user)
+      setProfileCropSource(null)
+      setProfileCropPixels(null)
+      setApiError(null)
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'Unable to remove profile image')
+    } finally {
+      setRemovingProfileImage(false)
     }
   }
 
@@ -599,6 +723,13 @@ function App() {
         <div className="top-nav-right">
           {authUser ? (
             <div className="auth-bar">
+              <button type="button" className="avatar-button" onClick={openProfileModal} aria-label="Edit profile picture">
+                {authUser.profileImageUrl ? (
+                  <img src={authUser.profileImageUrl} alt={`${authUser.email} profile`} />
+                ) : (
+                  <span className="avatar-fallback">{authUser.email.slice(0, 1).toUpperCase()}</span>
+                )}
+              </button>
               <span>{authUser.email}</span>
               <button type="button" className="ghost" onClick={logout}>
                 Logout
@@ -842,6 +973,80 @@ function App() {
                 <button type="button" className="ghost" onClick={closeEditHabitModal}>Cancel</button>
               </div>
             </form>
+          </section>
+        </div>
+      ) : null}
+
+      {profileModalOpen && authUser ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="panel modal-panel" role="dialog" aria-modal="true" aria-label="Profile picture settings">
+            <div className="modal-header">
+              <h3>Profile picture</h3>
+              <button type="button" className="ghost icon-btn" onClick={closeProfileModal} aria-label="Close profile picture modal">
+                <span aria-hidden="true">×</span>
+              </button>
+            </div>
+            <div className="profile-modal-body">
+              <div className="profile-avatar-preview">
+                {authUser.profileImageUrl ? (
+                  <img src={authUser.profileImageUrl} alt={`${authUser.email} profile`} />
+                ) : (
+                  <span className="avatar-fallback large">{authUser.email.slice(0, 1).toUpperCase()}</span>
+                )}
+              </div>
+              <div className="actions">
+                <label className="ghost file-label">
+                  Upload new image
+                  <input type="file" accept="image/*" onChange={handleProfileFileSelection} />
+                </label>
+                <button type="button" className="ghost" onClick={removeProfileImage} disabled={!authUser.profileImageUrl || removingProfileImage}>
+                  {removingProfileImage ? 'Removing...' : 'Remove image'}
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {profileCropSource ? (
+        <div className="crop-popup-backdrop" role="presentation">
+          <section className="panel crop-popup" role="dialog" aria-modal="true" aria-label="Crop profile picture">
+            <div className="modal-header">
+              <h3>Crop image</h3>
+              <button type="button" className="ghost icon-btn" onClick={() => setProfileCropSource(null)} aria-label="Close crop popup">
+                <span aria-hidden="true">×</span>
+              </button>
+            </div>
+            <div className="cropper-frame">
+              <Cropper
+                image={profileCropSource}
+                crop={profileCrop}
+                zoom={profileZoom}
+                aspect={1}
+                onCropChange={setProfileCrop}
+                onZoomChange={setProfileZoom}
+                onCropComplete={(_area, areaPixels) => setProfileCropPixels(areaPixels)}
+                cropShape="rect"
+                showGrid
+              />
+            </div>
+            <label className="zoom-row">
+              Zoom
+              <input
+                type="range"
+                min={1}
+                max={3}
+                step={0.05}
+                value={profileZoom}
+                onChange={(event) => setProfileZoom(Number(event.target.value))}
+              />
+            </label>
+            <div className="actions">
+              <button type="button" className="ghost" onClick={() => setProfileCropSource(null)}>Cancel</button>
+              <button type="button" onClick={uploadProfileImage} disabled={!profileCropPixels || uploadingProfileImage}>
+                {uploadingProfileImage ? 'Uploading...' : 'Use cropped image'}
+              </button>
+            </div>
           </section>
         </div>
       ) : null}

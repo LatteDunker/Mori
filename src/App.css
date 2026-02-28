@@ -126,6 +126,33 @@ body {
   gap: 0.6rem;
 }
 
+.avatar-button {
+  width: 2rem;
+  height: 2rem;
+  min-width: 2rem;
+  border-radius: 999px;
+  padding: 0;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.avatar-button img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar-fallback {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.avatar-fallback.large {
+  font-size: 1.2rem;
+}
+
 .panel {
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);
@@ -540,6 +567,77 @@ button:hover {
   margin-top: 0.85rem;
   display: grid;
   gap: 0.8rem;
+}
+
+.profile-modal-body {
+  margin-top: 0.8rem;
+  display: grid;
+  gap: 0.9rem;
+}
+
+.profile-avatar-preview {
+  width: 72px;
+  height: 72px;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--panel-border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.profile-avatar-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.file-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  border-width: 1px;
+  border-style: solid;
+  border-radius: 10px;
+  padding: 0.55rem 0.9rem;
+}
+
+.file-label input {
+  display: none;
+}
+
+.crop-popup-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgb(15 23 42 / 38%);
+  backdrop-filter: blur(7px);
+  -webkit-backdrop-filter: blur(7px);
+  display: grid;
+  place-items: center;
+  z-index: 60;
+  padding: 1rem;
+}
+
+.crop-popup {
+  margin-top: 0;
+  width: min(520px, 100%);
+}
+
+.cropper-frame {
+  position: relative;
+  margin-top: 0.8rem;
+  height: 320px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
+}
+
+.zoom-row {
+  margin-top: 0.8rem;
+  display: grid;
+  gap: 0.35rem;
 }
 
 @media (max-width: 900px) {

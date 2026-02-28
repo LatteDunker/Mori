@@ -65,6 +65,8 @@ const toUser = (row) => ({
   id: row.id,
   email: row.email,
   passwordHash: row.password_hash,
+  profileImageUrl: row.profile_image_url ?? null,
+  profileImageStorageKey: row.profile_image_storage_key ?? null,
   createdAt: row.created_at,
 })
 
@@ -91,6 +93,8 @@ export const initSchema = async () => {
       id CHAR(36) PRIMARY KEY,
       email VARCHAR(255) NOT NULL UNIQUE,
       password_hash VARCHAR(255) NOT NULL,
+      profile_image_url VARCHAR(512) NULL,
+      profile_image_storage_key VARCHAR(255) NULL,
       created_at DATETIME NOT NULL
     )
   `)
@@ -180,6 +184,8 @@ export const initSchema = async () => {
 
   await addColumnIfMissing('habits', 'user_id CHAR(36) NULL AFTER id')
   await addColumnIfMissing('habits', 'sort_order INT NOT NULL DEFAULT 0 AFTER color')
+  await addColumnIfMissing('users', 'profile_image_url VARCHAR(512) NULL AFTER password_hash')
+  await addColumnIfMissing('users', 'profile_image_storage_key VARCHAR(255) NULL AFTER profile_image_url')
   await addColumnIfMissing('habit_entries', 'user_id CHAR(36) NULL AFTER id')
 
   await db.query(
@@ -212,7 +218,7 @@ export const createUser = async ({ email, passwordHash }) => {
 export const findUserByEmail = async (email) => {
   const db = await getDb()
   const [rows] = await db.query(
-    'SELECT id, email, password_hash, created_at FROM users WHERE email = ? LIMIT 1',
+    'SELECT id, email, password_hash, profile_image_url, profile_image_storage_key, created_at FROM users WHERE email = ? LIMIT 1',
     [email],
   )
   return rows[0] ? toUser(rows[0]) : null
@@ -221,10 +227,46 @@ export const findUserByEmail = async (email) => {
 export const findUserById = async (userId) => {
   const db = await getDb()
   const [rows] = await db.query(
-    'SELECT id, email, password_hash, created_at FROM users WHERE id = ? LIMIT 1',
+    'SELECT id, email, password_hash, profile_image_url, profile_image_storage_key, created_at FROM users WHERE id = ? LIMIT 1',
     [userId],
   )
   return rows[0] ? toUser(rows[0]) : null
+}
+
+export const setUserProfileImage = async ({ userId, storageKey, url }) => {
+  const db = await getDb()
+  const [existingRows] = await db.query(
+    'SELECT profile_image_storage_key FROM users WHERE id = ? LIMIT 1',
+    [userId],
+  )
+  if (!existingRows[0]) return null
+
+  const previousStorageKey = existingRows[0].profile_image_storage_key ?? null
+  await db.query(
+    'UPDATE users SET profile_image_url = ?, profile_image_storage_key = ? WHERE id = ?',
+    [url, storageKey, userId],
+  )
+  const user = await findUserById(userId)
+  if (!user) return null
+  return { user, previousStorageKey }
+}
+
+export const clearUserProfileImage = async (userId) => {
+  const db = await getDb()
+  const [existingRows] = await db.query(
+    'SELECT profile_image_storage_key FROM users WHERE id = ? LIMIT 1',
+    [userId],
+  )
+  if (!existingRows[0]) return null
+
+  const previousStorageKey = existingRows[0].profile_image_storage_key ?? null
+  await db.query(
+    'UPDATE users SET profile_image_url = NULL, profile_image_storage_key = NULL WHERE id = ?',
+    [userId],
+  )
+  const user = await findUserById(userId)
+  if (!user) return null
+  return { user, previousStorageKey }
 }
 
 export const revokeToken = async ({ userId, tokenJti, expiresAt }) => {
