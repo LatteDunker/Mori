@@ -207,10 +207,40 @@ button:hover {
   gap: 0.55rem;
 }
 
-.habit-list li {
+.habit-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 0.5rem;
+  align-items: center;
+}
+
+.habit-row.dragging {
+  opacity: 0.85;
+}
+
+.drag-handle {
+  border-color: var(--ghost-border);
+  background: var(--ghost-bg);
+  color: var(--ghost-text);
+  padding: 0.45rem;
+  width: 2rem;
+  min-width: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.drag-handle-icon {
+  width: 11px;
+  height: 13px;
+  background-image: radial-gradient(currentColor 1.1px, transparent 1.1px);
+  background-size: 5px 5px;
+  background-position: 0 0;
 }
 
 .habit-item {
@@ -221,6 +251,7 @@ button:hover {
   align-items: center;
   justify-content: flex-start;
   gap: 0.5rem;
+  min-width: 0;
 }
 
 .habit-item.active {
@@ -231,6 +262,13 @@ button:hover {
   width: 0.75rem;
   height: 0.75rem;
   border-radius: 50%;
+}
+
+.habit-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tracker-header {

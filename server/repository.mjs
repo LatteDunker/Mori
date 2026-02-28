@@ -8,6 +8,7 @@ const toHabit = (row) => ({
   userId: row.user_id,
   name: row.name,
   color: row.color,
+  sortOrder: Number(row.sort_order ?? 0),
   createdAt: row.created_at,
 })
 
@@ -109,6 +110,7 @@ export const initSchema = async () => {
       user_id CHAR(36) NOT NULL,
       name VARCHAR(120) NOT NULL,
       color VARCHAR(20) NOT NULL,
+      sort_order INT NOT NULL DEFAULT 0,
       created_at DATETIME NOT NULL,
       INDEX idx_habits_user (user_id),
       CONSTRAINT fk_habits_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -177,7 +179,17 @@ export const initSchema = async () => {
   `)
 
   await addColumnIfMissing('habits', 'user_id CHAR(36) NULL AFTER id')
+  await addColumnIfMissing('habits', 'sort_order INT NOT NULL DEFAULT 0 AFTER color')
   await addColumnIfMissing('habit_entries', 'user_id CHAR(36) NULL AFTER id')
+
+  await db.query(
+    `UPDATE habits h
+     JOIN (
+       SELECT id, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC) - 1 AS next_order
+       FROM habits
+     ) ranked ON ranked.id = h.id
+     SET h.sort_order = ranked.next_order`,
+  )
 }
 
 export const createUser = async ({ email, passwordHash }) => {
@@ -253,7 +265,7 @@ export const habitBelongsToUser = async (userId, habitId) => {
 export const listHabits = async (userId) => {
   const db = await getDb()
   const [rows] = await db.query(
-    'SELECT id, user_id, name, color, created_at FROM habits WHERE user_id = ? ORDER BY created_at DESC',
+    'SELECT id, user_id, name, color, sort_order, created_at FROM habits WHERE user_id = ? ORDER BY sort_order ASC, created_at DESC',
     [userId],
   )
   return rows.map(toHabit)
@@ -261,21 +273,55 @@ export const listHabits = async (userId) => {
 
 export const createHabit = async ({ userId, name, color }) => {
   const db = await getDb()
+  const [[orderRow]] = await db.query('SELECT COALESCE(MAX(sort_order), -1) AS max_sort_order FROM habits WHERE user_id = ?', [
+    userId,
+  ])
   const habit = {
     id: randomUUID(),
     userId,
     name,
     color,
+    sortOrder: Number(orderRow?.max_sort_order ?? -1) + 1,
     createdAt: toMySqlDateTime(new Date()),
   }
-  await db.query('INSERT INTO habits (id, user_id, name, color, created_at) VALUES (?, ?, ?, ?, ?)', [
+  await db.query('INSERT INTO habits (id, user_id, name, color, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?)', [
     habit.id,
     habit.userId,
     habit.name,
     habit.color,
+    habit.sortOrder,
     habit.createdAt,
   ])
   return habit
+}
+
+export const reorderHabits = async ({ userId, habitIds }) => {
+  const db = await getDb()
+  const normalizedIds = [...new Set(habitIds.map((id) => String(id)))]
+  const [rows] = await db.query('SELECT id FROM habits WHERE user_id = ? ORDER BY sort_order ASC, created_at DESC', [userId])
+  const currentIds = rows.map((row) => row.id)
+  if (normalizedIds.length !== currentIds.length) return null
+  if (currentIds.some((id) => !normalizedIds.includes(id))) return null
+
+  const connection = await db.getConnection()
+  try {
+    await connection.beginTransaction()
+    for (let index = 0; index < normalizedIds.length; index += 1) {
+      await connection.query('UPDATE habits SET sort_order = ? WHERE user_id = ? AND id = ?', [index, userId, normalizedIds[index]])
+    }
+    await connection.commit()
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
+
+  const [updatedRows] = await db.query(
+    'SELECT id, user_id, name, color, sort_order, created_at FROM habits WHERE user_id = ? ORDER BY sort_order ASC, created_at DESC',
+    [userId],
+  )
+  return updatedRows.map(toHabit)
 }
 
 export const deleteHabit = async ({ userId, habitId }) => {

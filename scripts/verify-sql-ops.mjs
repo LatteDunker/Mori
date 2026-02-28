@@ -21,6 +21,7 @@ import {
   listHabits,
   listVisionImages,
   listVisionsForYear,
+  reorderHabits,
   revokeToken,
   upsertVision,
   upsertEntry,
@@ -87,13 +88,24 @@ const runRepositoryChecks = async () => {
   assert(foundUser?.id === user.id, 'findUserByEmail should return created user', { foundUser, user })
 
   const habit = await createHabit({ userId: user.id, name: 'Repo Habit', color: '#1d4ed8' })
+  const secondHabit = await createHabit({ userId: user.id, name: 'Repo Habit Two', color: '#16a34a' })
   await createHabit({ userId: otherUser.id, name: 'Other User Habit', color: '#6d28d9' })
-  log('habits created', { habit })
+  log('habits created', { habit, secondHabit })
 
   const ownHabits = await listHabits(user.id)
   const otherHabits = await listHabits(otherUser.id)
-  assert(ownHabits.length === 1, 'listHabits should only return own habits', ownHabits)
+  assert(ownHabits.length === 2, 'listHabits should only return own habits', ownHabits)
   assert(otherHabits.length === 1, 'other user should have isolated habits', otherHabits)
+
+  const reorderedHabits = await reorderHabits({ userId: user.id, habitIds: [secondHabit.id, habit.id] })
+  assert(
+    Array.isArray(reorderedHabits) &&
+      reorderedHabits.length === 2 &&
+      reorderedHabits[0]?.id === secondHabit.id &&
+      reorderedHabits[1]?.id === habit.id,
+    'reorderHabits should persist the new sort order',
+    reorderedHabits,
+  )
 
   const firstEntry = await upsertEntry({
     userId: user.id,
@@ -256,9 +268,40 @@ const runEndpointChecks = async () => {
     })
     assert(createdHabit.status === 201, 'create habit endpoint should return 201', createdHabit)
     const habitId = createdHabit.payload.habit.id
+    const createdHabitTwo = await request(baseUrl, '/api/habits', {
+      method: 'POST',
+      token,
+      body: { name: 'API Habit Two', color: '#16a34a' },
+    })
+    assert(createdHabitTwo.status === 201, 'create second habit endpoint should return 201', createdHabitTwo)
+    const habitIdTwo = createdHabitTwo.payload.habit.id
 
     const habits = await request(baseUrl, '/api/habits', { token })
-    assert(habits.status === 200 && habits.payload?.habits?.length >= 1, 'list habits should return rows', habits)
+    assert(habits.status === 200 && habits.payload?.habits?.length >= 2, 'list habits should return rows', habits)
+
+    const reorderHabitsResponse = await request(baseUrl, '/api/habits/reorder', {
+      method: 'PATCH',
+      token,
+      body: { habitIds: [habitIdTwo, habitId] },
+    })
+    assert(
+      reorderHabitsResponse.status === 200 &&
+        Array.isArray(reorderHabitsResponse.payload?.habits) &&
+        reorderHabitsResponse.payload.habits[0]?.id === habitIdTwo &&
+        reorderHabitsResponse.payload.habits[1]?.id === habitId,
+      'reorder habits endpoint should return habits in requested order',
+      reorderHabitsResponse,
+    )
+
+    const habitsAfterReorder = await request(baseUrl, '/api/habits', { token })
+    assert(
+      habitsAfterReorder.status === 200 &&
+        Array.isArray(habitsAfterReorder.payload?.habits) &&
+        habitsAfterReorder.payload.habits[0]?.id === habitIdTwo &&
+        habitsAfterReorder.payload.habits[1]?.id === habitId,
+      'list habits should preserve persisted reorder',
+      habitsAfterReorder,
+    )
 
     const upsertA = await request(baseUrl, `/api/habits/${habitId}/entries/${dateA}`, {
       method: 'PUT',

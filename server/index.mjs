@@ -26,6 +26,7 @@ import {
   listHabits,
   listVisionImages,
   listVisionsForYear,
+  reorderHabits,
   revokeToken,
   addEntryImage,
   upsertVision,
@@ -138,6 +139,16 @@ export const createApp = () => {
     if (!name) return res.status(400).json({ message: 'Habit name is required' })
     const habit = await createHabit({ userId: req.auth.userId, name, color })
     return res.status(201).json({ habit })
+  })
+
+  app.patch('/api/habits/reorder', requireAuth, async (req, res) => {
+    const habitIds = Array.isArray(req.body?.habitIds) ? req.body.habitIds : null
+    if (!habitIds || !habitIds.every((id) => typeof id === 'string' && id.trim().length > 0)) {
+      return res.status(400).json({ message: 'habitIds must be a non-empty array of habit ids' })
+    }
+    const habits = await reorderHabits({ userId: req.auth.userId, habitIds })
+    if (!habits) return res.status(400).json({ message: 'habitIds must match your current habits exactly' })
+    return res.json({ habits })
   })
 
   app.delete('/api/habits/:habitId', requireAuth, async (req, res) => {

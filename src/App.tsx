@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ChangeEvent, type FormEvent } from 'react'
 import { differenceInCalendarDays, eachDayOfInterval, endOfYear, format, isAfter, parseISO, startOfYear, subDays } from 'date-fns'
+import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
+import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import './App.css'
 
-type Habit = { id: string; userId?: string; name: string; color: string; createdAt: string }
+type Habit = { id: string; userId?: string; name: string; color: string; sortOrder?: number; createdAt: string }
 type HabitEntry = {
   id: string
   userId?: string
@@ -85,6 +88,46 @@ const calcStats = (yearDays: Date[], entriesByDate: Map<string, HabitEntry>) => 
   return { completedDays, currentStreak, longestStreak }
 }
 
+type SortableHabitItemProps = {
+  habit: Habit
+  isActive: boolean
+  onSelect: (habitId: string) => void
+  onDelete: (habitId: string) => void
+}
+
+const SortableHabitItem = ({ habit, isActive, onSelect, onDelete }: SortableHabitItemProps) => {
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({
+    id: habit.id,
+  })
+
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  }
+
+  return (
+    <li ref={setNodeRef} style={style} className={isDragging ? 'habit-row dragging' : 'habit-row'}>
+      <button
+        type="button"
+        className="drag-handle"
+        ref={setActivatorNodeRef}
+        {...attributes}
+        {...listeners}
+        aria-label={`Reorder ${habit.name}`}
+      >
+        <span className="drag-handle-icon" />
+      </button>
+      <button className={isActive ? 'habit-item active' : 'habit-item'} onClick={() => onSelect(habit.id)} type="button">
+        <span className="habit-color" style={{ backgroundColor: habit.color }} />
+        <span className="habit-name">{habit.name}</span>
+      </button>
+      <button className="danger" onClick={() => onDelete(habit.id)} type="button" aria-label={`Delete ${habit.name}`}>
+        Delete
+      </button>
+    </li>
+  )
+}
+
 function App() {
   const [habits, setHabits] = useState<Habit[]>([])
   const [entries, setEntries] = useState<HabitEntry[]>([])
@@ -153,6 +196,11 @@ function App() {
     return map
   }, [visions])
   const stats = useMemo(() => calcStats(yearDays, entriesByDate), [yearDays, entriesByDate])
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 6 },
+    }),
+  )
 
   const refreshHabitsWithToken = useCallback(async (accessToken: string) => {
     const data = await apiCall<{ habits: Habit[] }>('/api/habits', { token: accessToken })
@@ -290,7 +338,7 @@ function App() {
         token,
         body: JSON.stringify({ name, color: habitColor }),
       })
-      setHabits((current) => [data.habit, ...current])
+      setHabits((current) => [...current, data.habit])
       setSelectedHabitId(data.habit.id)
       setHabitName('')
       setApiError(null)
@@ -312,6 +360,42 @@ function App() {
       setApiError(error instanceof Error ? error.message : 'Unable to delete habit')
     }
   }
+
+  const reorderHabits = useCallback(
+    async (sourceHabitId: string, targetHabitId: string) => {
+      if (!token || sourceHabitId === targetHabitId) return
+      const previousHabits = habits
+      const oldIndex = previousHabits.findIndex((habit) => habit.id === sourceHabitId)
+      const newIndex = previousHabits.findIndex((habit) => habit.id === targetHabitId)
+      if (oldIndex < 0 || newIndex < 0) return
+
+      const nextHabits = arrayMove(previousHabits, oldIndex, newIndex)
+      setHabits(nextHabits)
+      try {
+        const response = await apiCall<{ habits: Habit[] }>('/api/habits/reorder', {
+          method: 'PATCH',
+          token,
+          body: JSON.stringify({ habitIds: nextHabits.map((habit) => habit.id) }),
+        })
+        setHabits(response.habits)
+        setApiError(null)
+      } catch (error) {
+        setHabits(previousHabits)
+        setApiError(error instanceof Error ? error.message : 'Unable to reorder habits')
+      }
+    },
+    [habits, token],
+  )
+
+  const handleHabitDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const sourceHabitId = String(event.active.id)
+      const targetHabitId = event.over ? String(event.over.id) : null
+      if (!targetHabitId || sourceHabitId === targetHabitId) return
+      void reorderHabits(sourceHabitId, targetHabitId)
+    },
+    [reorderHabits],
+  )
 
   const openDayEditor = async (date: string) => {
     setSelectedDate(date)
@@ -572,19 +656,21 @@ function App() {
               {loadingHabits ? <p className="muted">Loading habits...</p> : null}
               {!loadingHabits && habits.length === 0 ? <p className="muted">Create your first habit to start tracking.</p> : null}
               {!loadingHabits && habits.length > 0 ? (
-                <ul className="habit-list">
-                  {habits.map((habit) => (
-                    <li key={habit.id}>
-                      <button className={habit.id === activeHabitId ? 'habit-item active' : 'habit-item'} onClick={() => setSelectedHabitId(habit.id)} type="button">
-                        <span className="habit-color" style={{ backgroundColor: habit.color }} />
-                        {habit.name}
-                      </button>
-                      <button className="danger" onClick={() => removeHabit(habit.id)} type="button" aria-label={`Delete ${habit.name}`}>
-                        Delete
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleHabitDragEnd}>
+                  <SortableContext items={habits.map((habit) => habit.id)} strategy={verticalListSortingStrategy}>
+                    <ul className="habit-list">
+                      {habits.map((habit) => (
+                        <SortableHabitItem
+                          key={habit.id}
+                          habit={habit}
+                          isActive={habit.id === activeHabitId}
+                          onSelect={setSelectedHabitId}
+                          onDelete={removeHabit}
+                        />
+                      ))}
+                    </ul>
+                  </SortableContext>
+                </DndContext>
               ) : null}
             </aside>
 
