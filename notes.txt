@@ -11,10 +11,8 @@ Add multiple events for a day.
 A single day can contain multiple habit events.
 A single habit event can belong to multiple habits.
 
-
-
-
-
+AI timeline coaching based on previous
+Share timelines/journeys w people
 
 
 
@@ -23,3 +21,6 @@ Change log:
 + Dark theme.
 + Drag habits to reorder
 + Edit habit (name + color)
+
+
+

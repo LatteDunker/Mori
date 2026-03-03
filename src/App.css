@@ -438,6 +438,18 @@ button:hover {
   max-width: 580px;
 }
 
+.day-editor-toggle {
+  margin-top: 0.9rem;
+  display: inline-flex;
+  gap: 0.45rem;
+}
+
+.day-editor-toggle button.active {
+  border-color: var(--btn-primary-bg);
+  background: var(--btn-primary-bg);
+  color: #fff;
+}
+
 .auth-panel {
   max-width: 460px;
 }

@@ -183,6 +183,7 @@ function App() {
   const [editingHabitColor, setEditingHabitColor] = useState('#2f80ed')
   const [updatingHabit, setUpdatingHabit] = useState(false)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
+  const [dayEditorMode, setDayEditorMode] = useState<'event' | 'vision'>('event')
   const [draftCompleted, setDraftCompleted] = useState(false)
   const [draftNote, setDraftNote] = useState('')
   const [draftVisionTitle, setDraftVisionTitle] = useState('')
@@ -562,6 +563,7 @@ function App() {
     setSelectedDate(date)
     const dayEntry = entriesByDate.get(date)
     const dayVision = visionsByDate.get(date)
+    setDayEditorMode(dayVision && !hasProgress(dayEntry) ? 'vision' : 'event')
     setDraftCompleted(dayEntry?.completed ?? false)
     setDraftNote(dayEntry?.note ?? '')
     setDraftVisionTitle(dayVision?.title ?? '')
@@ -719,7 +721,7 @@ function App() {
   return (
     <main className="app-shell">
       <nav className="top-nav">
-        <span className="top-nav-title">Progress Tracker</span>
+        <span className="top-nav-title">Mori</span>
         <div className="top-nav-right">
           {authUser ? (
             <div className="auth-bar">
@@ -882,67 +884,95 @@ function App() {
           {selectedDate && selectedHabit ? (
             <section className="panel day-editor">
               <h3>{format(parseISO(selectedDate), 'EEEE, MMMM d, yyyy')}</h3>
-              <label className="check-row">
-                <input type="checkbox" checked={draftCompleted} onChange={(event) => setDraftCompleted(event.target.checked)} />
-                Mark progress for this day
-              </label>
-              <label className="notes">
-                Notes
-                <textarea value={draftNote} onChange={(event) => setDraftNote(event.target.value)} placeholder="What did you do today?" />
-              </label>
-
-              <div className="images-section">
-                <h4>Entry images (max 8MB each)</h4>
-                <div className="image-upload-row">
-                  <input type="file" accept="image/*" onChange={handleImageSelection} />
-                  <button type="button" onClick={uploadEntryImage} disabled={!selectedImageFile || uploadingImage}>
-                    {uploadingImage ? 'Uploading...' : 'Upload entry image'}
-                  </button>
-                </div>
-                {dayImages.length === 0 ? <p className="muted">No entry images added yet.</p> : null}
-                {dayImages.length > 0 ? (
-                  <div className="image-grid">
-                    {dayImages.map((image) => (
-                      <figure key={image.id} className="image-card">
-                        <img src={image.url} alt={image.originalName} />
-                        <figcaption>{image.originalName}</figcaption>
-                        <button type="button" className="ghost" onClick={() => deleteEntryImageById(image.id)}>Remove</button>
-                      </figure>
-                    ))}
-                  </div>
-                ) : null}
+              <div className="day-editor-toggle" role="tablist" aria-label="Day editor mode">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={dayEditorMode === 'event'}
+                  className={`ghost ${dayEditorMode === 'event' ? 'active' : ''}`}
+                  onClick={() => setDayEditorMode('event')}
+                >
+                  Event
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={dayEditorMode === 'vision'}
+                  className={`ghost ${dayEditorMode === 'vision' ? 'active' : ''}`}
+                  onClick={() => setDayEditorMode('vision')}
+                >
+                  Vision
+                </button>
               </div>
 
-              <div className="vision-section">
-                <h4>Vision milestone (distinct purple on calendar)</h4>
-                <input value={draftVisionTitle} onChange={(event) => setDraftVisionTitle(event.target.value)} placeholder="Vision title" />
-                <textarea value={draftVisionDescription} onChange={(event) => setDraftVisionDescription(event.target.value)} placeholder="What does this milestone look like?" />
-                <div className="actions">
-                  <button type="button" className="vision-btn" onClick={saveDayVision}>Save vision</button>
-                  <button type="button" className="ghost" onClick={deleteDayVision}>Delete vision</button>
-                </div>
-                <div className="image-upload-row">
-                  <input type="file" accept="image/*" onChange={handleVisionImageSelection} />
-                  <button type="button" className="vision-btn" onClick={uploadVisionImage} disabled={!selectedVisionImageFile || uploadingVisionImage}>
-                    {uploadingVisionImage ? 'Uploading...' : 'Upload vision image'}
-                  </button>
-                </div>
-                {visionImages.length === 0 ? <p className="muted">No vision images added yet.</p> : null}
-                {visionImages.length > 0 ? (
-                  <div className="image-grid">
-                    {visionImages.map((image) => (
-                      <figure key={image.id} className="image-card">
-                        <img src={image.url} alt={image.originalName} />
-                        <figcaption>{image.originalName}</figcaption>
-                        <button type="button" className="ghost" onClick={() => deleteVisionImageById(image.id)}>Remove</button>
-                      </figure>
-                    ))}
+              {dayEditorMode === 'event' ? (
+                <>
+                  <label className="check-row">
+                    <input type="checkbox" checked={draftCompleted} onChange={(event) => setDraftCompleted(event.target.checked)} />
+                    Mark progress for this day
+                  </label>
+                  <label className="notes">
+                    Notes
+                    <textarea value={draftNote} onChange={(event) => setDraftNote(event.target.value)} placeholder="What did you do today?" />
+                  </label>
+
+                  <div className="images-section">
+                    <h4>Entry images (max 8MB each)</h4>
+                    <div className="image-upload-row">
+                      <input type="file" accept="image/*" onChange={handleImageSelection} />
+                      <button type="button" onClick={uploadEntryImage} disabled={!selectedImageFile || uploadingImage}>
+                        {uploadingImage ? 'Uploading...' : 'Upload entry image'}
+                      </button>
+                    </div>
+                    {dayImages.length === 0 ? <p className="muted">No entry images added yet.</p> : null}
+                    {dayImages.length > 0 ? (
+                      <div className="image-grid">
+                        {dayImages.map((image) => (
+                          <figure key={image.id} className="image-card">
+                            <img src={image.url} alt={image.originalName} />
+                            <figcaption>{image.originalName}</figcaption>
+                            <button type="button" className="ghost" onClick={() => deleteEntryImageById(image.id)}>Remove</button>
+                          </figure>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
-                ) : null}
-              </div>
+
+                  <div className="actions">
+                    <button type="button" onClick={saveDayEntry}>Save day entry</button>
+                  </div>
+                </>
+              ) : (
+                <div className="vision-section">
+                  <h4>Vision milestone (distinct purple on calendar)</h4>
+                  <input value={draftVisionTitle} onChange={(event) => setDraftVisionTitle(event.target.value)} placeholder="Vision title" />
+                  <textarea value={draftVisionDescription} onChange={(event) => setDraftVisionDescription(event.target.value)} placeholder="What does this milestone look like?" />
+                  <div className="actions">
+                    <button type="button" className="vision-btn" onClick={saveDayVision}>Save vision</button>
+                    <button type="button" className="ghost" onClick={deleteDayVision}>Delete vision</button>
+                  </div>
+                  <div className="image-upload-row">
+                    <input type="file" accept="image/*" onChange={handleVisionImageSelection} />
+                    <button type="button" className="vision-btn" onClick={uploadVisionImage} disabled={!selectedVisionImageFile || uploadingVisionImage}>
+                      {uploadingVisionImage ? 'Uploading...' : 'Upload vision image'}
+                    </button>
+                  </div>
+                  {visionImages.length === 0 ? <p className="muted">No vision images added yet.</p> : null}
+                  {visionImages.length > 0 ? (
+                    <div className="image-grid">
+                      {visionImages.map((image) => (
+                        <figure key={image.id} className="image-card">
+                          <img src={image.url} alt={image.originalName} />
+                          <figcaption>{image.originalName}</figcaption>
+                          <button type="button" className="ghost" onClick={() => deleteVisionImageById(image.id)}>Remove</button>
+                        </figure>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              )}
 
               <div className="actions">
-                <button type="button" onClick={saveDayEntry}>Save day entry</button>
                 <button type="button" className="ghost" onClick={() => setSelectedDate(null)}>Close</button>
               </div>
             </section>
