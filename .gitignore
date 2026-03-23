@@ -12,6 +12,8 @@ dist
 dist-ssr
 *.local
 .env
+.env.development
+.env.staging
 
 # Editor directories and files
 .vscode/*
@@ -25,6 +27,13 @@ dist-ssr
 *.sw?
 
 notes.txt
-.env
 
 uploads/*
+backups/
+
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/terraform.tfvars
+terraform/*.auto.tfvars

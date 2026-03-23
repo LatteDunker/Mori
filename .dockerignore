@@ -1,0 +1,6 @@
+node_modules
+dist
+.git
+uploads
+backups
+example_repo

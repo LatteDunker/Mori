@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ChangeEvent, type FormEvent } from 'react'
-import { differenceInCalendarDays, eachDayOfInterval, endOfYear, format, isAfter, parseISO, startOfYear, subDays } from 'date-fns'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent, type KeyboardEvent } from 'react'
+import { addDays, differenceInCalendarDays, eachDayOfInterval, endOfYear, format, isAfter, parseISO, startOfYear, subDays } from 'date-fns'
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import Cropper, { type Area } from 'react-easy-crop'
+import { useCreateHabitModal } from './hooks/useCreateHabitModal'
+import { useDayItemModal } from './hooks/useDayItemModal'
 import './App.css'
 
 type Habit = { id: string; userId?: string; name: string; color: string; sortOrder?: number; createdAt: string }
@@ -14,6 +16,7 @@ type HabitEntry = {
   date: string
   completed: boolean
   note: string
+  customColor?: string | null
   updatedAt: string
   imageCount?: number
 }
@@ -24,14 +27,18 @@ type Vision = {
   date: string
   title: string
   description: string
+  customColor?: string | null
   createdAt: string
   updatedAt: string
   imageCount?: number
 }
+type AuthUser = { id: string; email: string; profileImageUrl?: string | null; createdAt: string }
 type StoredImage = {
   id: string
   userId?: string
   habitId: string
+  entryId?: string
+  visionId?: string
   date: string
   storageKey: string
   url: string
@@ -40,7 +47,8 @@ type StoredImage = {
   fileSize: number
   createdAt: string
 }
-type AuthUser = { id: string; email: string; profileImageUrl?: string | null; createdAt: string }
+
+type WritingModeField = 'eventNote' | 'visionDescription' | null
 
 const CURRENT_YEAR = new Date().getFullYear()
 const TOKEN_STORAGE_KEY = 'progress-tracker:token'
@@ -49,6 +57,8 @@ const VISION_COLOR = '#8b5cf6'
 
 const hasProgress = (entry: HabitEntry | undefined) =>
   Boolean(entry?.completed || entry?.note.trim() || Number(entry?.imageCount ?? 0) > 0)
+
+const hasProgressForDay = (entries: HabitEntry[] | undefined) => (entries ?? []).some((entry) => hasProgress(entry))
 
 const loadImageFromUrl = (source: string) =>
   new Promise<HTMLImageElement>((resolve, reject) => {
@@ -112,8 +122,8 @@ const apiCall = async <T,>(path: string, init?: RequestInit & { token?: string |
   return (await response.json()) as T
 }
 
-const calcStats = (yearDays: Date[], entriesByDate: Map<string, HabitEntry>) => {
-  const progressDays = yearDays.map((day) => hasProgress(entriesByDate.get(format(day, 'yyyy-MM-dd'))))
+const calcStats = (yearDays: Date[], entriesByDate: Map<string, HabitEntry[]>) => {
+  const progressDays = yearDays.map((day) => hasProgressForDay(entriesByDate.get(format(day, 'yyyy-MM-dd'))))
   const completedDays = progressDays.filter(Boolean).length
   let longestStreak = 0
   let running = 0
@@ -124,7 +134,7 @@ const calcStats = (yearDays: Date[], entriesByDate: Map<string, HabitEntry>) => 
   let currentStreak = 0
   let cursor = isAfter(new Date(), yearDays[yearDays.length - 1]) ? yearDays[yearDays.length - 1] : new Date()
   while (format(cursor, 'yyyy') === String(CURRENT_YEAR)) {
-    if (!hasProgress(entriesByDate.get(format(cursor, 'yyyy-MM-dd')))) break
+    if (!hasProgressForDay(entriesByDate.get(format(cursor, 'yyyy-MM-dd')))) break
     currentStreak += 1
     cursor = subDays(cursor, 1)
   }
@@ -135,10 +145,9 @@ type SortableHabitItemProps = {
   habit: Habit
   isActive: boolean
   onSelect: (habitId: string) => void
-  onDelete: (habitId: string) => void
 }
 
-const SortableHabitItem = ({ habit, isActive, onSelect, onDelete }: SortableHabitItemProps) => {
+const SortableHabitItem = ({ habit, isActive, onSelect }: SortableHabitItemProps) => {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({
     id: habit.id,
   })
@@ -150,23 +159,22 @@ const SortableHabitItem = ({ habit, isActive, onSelect, onDelete }: SortableHabi
 
   return (
     <li ref={setNodeRef} style={style} className={isDragging ? 'habit-row dragging' : 'habit-row'}>
-      <button
-        type="button"
-        className="drag-handle"
-        ref={setActivatorNodeRef}
-        {...attributes}
-        {...listeners}
-        aria-label={`Reorder ${habit.name}`}
-      >
-        <span className="drag-handle-icon" />
-      </button>
-      <button className={isActive ? 'habit-item active' : 'habit-item'} onClick={() => onSelect(habit.id)} type="button">
-        <span className="habit-color" style={{ backgroundColor: habit.color }} />
-        <span className="habit-name">{habit.name}</span>
-      </button>
-      <button className="danger" onClick={() => onDelete(habit.id)} type="button" aria-label={`Delete ${habit.name}`}>
-        Delete
-      </button>
+      <div className={isActive ? 'habit-item active' : 'habit-item'}>
+        <button
+          type="button"
+          className="drag-handle-inline"
+          ref={setActivatorNodeRef}
+          {...attributes}
+          {...listeners}
+          aria-label={`Reorder ${habit.name}`}
+        >
+          <span className="drag-handle-icon" />
+        </button>
+        <button className="habit-select" onClick={() => onSelect(habit.id)} type="button">
+          <span className="habit-color" style={{ backgroundColor: habit.color }} />
+          <span className="habit-name">{habit.name}</span>
+        </button>
+      </div>
     </li>
   )
 }
@@ -176,24 +184,31 @@ function App() {
   const [entries, setEntries] = useState<HabitEntry[]>([])
   const [visions, setVisions] = useState<Vision[]>([])
   const [selectedHabitId, setSelectedHabitId] = useState<string | null>(null)
-  const [habitName, setHabitName] = useState('')
-  const [habitColor, setHabitColor] = useState('#2f80ed')
+  const createHabitModal = useCreateHabitModal()
+  const [creatingHabit, setCreatingHabit] = useState(false)
   const [editingHabitId, setEditingHabitId] = useState<string | null>(null)
   const [editingHabitName, setEditingHabitName] = useState('')
   const [editingHabitColor, setEditingHabitColor] = useState('#2f80ed')
   const [updatingHabit, setUpdatingHabit] = useState(false)
+  const [deletingHabit, setDeletingHabit] = useState(false)
+  const [archivingHabit, setArchivingHabit] = useState(false)
+  const [activeView, setActiveView] = useState<'main' | 'archived'>('main')
+  const [archivedHabits, setArchivedHabits] = useState<Habit[]>([])
+  const [loadingArchived, setLoadingArchived] = useState(false)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
-  const [dayEditorMode, setDayEditorMode] = useState<'event' | 'vision'>('event')
+  const dayItemModal = useDayItemModal()
   const [draftCompleted, setDraftCompleted] = useState(false)
   const [draftNote, setDraftNote] = useState('')
+  const [draftEntryColor, setDraftEntryColor] = useState('')
   const [draftVisionTitle, setDraftVisionTitle] = useState('')
   const [draftVisionDescription, setDraftVisionDescription] = useState('')
-  const [dayImages, setDayImages] = useState<StoredImage[]>([])
-  const [visionImages, setVisionImages] = useState<StoredImage[]>([])
-  const [selectedImageFile, setSelectedImageFile] = useState<File | null>(null)
-  const [selectedVisionImageFile, setSelectedVisionImageFile] = useState<File | null>(null)
-  const [uploadingImage, setUploadingImage] = useState(false)
-  const [uploadingVisionImage, setUploadingVisionImage] = useState(false)
+  const [draftVisionColor, setDraftVisionColor] = useState('')
+  const [writingModeField, setWritingModeField] = useState<WritingModeField>(null)
+  const [entryImagesByEntryId, setEntryImagesByEntryId] = useState<Map<string, StoredImage[]>>(new Map())
+  const [visionImagesByVisionId, setVisionImagesByVisionId] = useState<Map<string, StoredImage[]>>(new Map())
+  const [queuedModalFiles, setQueuedModalFiles] = useState<File[]>([])
+  const [uploadingModalImages, setUploadingModalImages] = useState(false)
+  const [deletingModalImageId, setDeletingModalImageId] = useState<string | null>(null)
   const [profileModalOpen, setProfileModalOpen] = useState(false)
   const [profileCropSource, setProfileCropSource] = useState<string | null>(null)
   const [profileCrop, setProfileCrop] = useState({ x: 0, y: 0 })
@@ -216,10 +231,13 @@ function App() {
   })
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [apiError, setApiError] = useState<string | null>(null)
+  const eventWritingRef = useRef<HTMLTextAreaElement | null>(null)
+  const visionWritingRef = useRef<HTMLTextAreaElement | null>(null)
 
   const activeHabitId = selectedHabitId ?? habits[0]?.id ?? null
   const selectedHabit = habits.find((habit) => habit.id === activeHabitId) ?? null
   const editingHabit = habits.find((habit) => habit.id === editingHabitId) ?? null
+  const isWritingModeOpen = writingModeField !== null
   const yearStart = startOfYear(new Date(CURRENT_YEAR, 0, 1))
   const todayKey = format(new Date(), 'yyyy-MM-dd')
   const yearDays = useMemo(
@@ -239,16 +257,48 @@ function App() {
     [yearStart, yearStartOffset],
   )
   const entriesByDate = useMemo(() => {
-    const map = new Map<string, HabitEntry>()
-    for (const entry of entries) map.set(entry.date, entry)
+    const map = new Map<string, HabitEntry[]>()
+    for (const entry of entries) {
+      const list = map.get(entry.date) ?? []
+      list.push(entry)
+      map.set(entry.date, list)
+    }
     return map
   }, [entries])
   const visionsByDate = useMemo(() => {
-    const map = new Map<string, Vision>()
-    for (const vision of visions) map.set(vision.date, vision)
+    const map = new Map<string, Vision[]>()
+    for (const vision of visions) {
+      const list = map.get(vision.date) ?? []
+      list.push(vision)
+      map.set(vision.date, list)
+    }
     return map
   }, [visions])
   const stats = useMemo(() => calcStats(yearDays, entriesByDate), [yearDays, entriesByDate])
+  const yearStartDate = yearDays[0]
+  const yearEndDate = yearDays[yearDays.length - 1]
+  const timelineCenterDate = useMemo(() => {
+    if (selectedDate) return parseISO(selectedDate)
+    const today = new Date()
+    return today < yearStartDate ? yearStartDate : today > yearEndDate ? yearEndDate : today
+  }, [selectedDate, yearStartDate, yearEndDate])
+  const timelineCenterKey = format(timelineCenterDate, 'yyyy-MM-dd')
+  const timelineWindow = useMemo(() => {
+    const middleIndex = 3
+    return Array.from({ length: 7 }, (_, index) => {
+      const date = addDays(timelineCenterDate, index - middleIndex)
+      if (date < yearStartDate || date > yearEndDate) return null
+      return date
+    })
+  }, [timelineCenterDate, yearStartDate, yearEndDate])
+  const timelineEventCount = useMemo(
+    () =>
+      yearDays.filter((day) => {
+        const key = format(day, 'yyyy-MM-dd')
+        return hasProgressForDay(entriesByDate.get(key)) || Boolean((visionsByDate.get(key) ?? []).length)
+      }).length,
+    [yearDays, entriesByDate, visionsByDate],
+  )
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 6 },
@@ -259,6 +309,11 @@ function App() {
     const data = await apiCall<{ habits: Habit[] }>('/api/habits', { token: accessToken })
     setHabits(data.habits)
     setSelectedHabitId((current) => (current && data.habits.some((h) => h.id === current) ? current : data.habits[0]?.id ?? null))
+  }, [])
+
+  const refreshArchivedHabits = useCallback(async (accessToken: string) => {
+    const data = await apiCall<{ habits: Habit[] }>('/api/habits/archive', { token: accessToken })
+    setArchivedHabits(data.habits)
   }, [])
 
   const refreshYearData = useCallback(
@@ -273,18 +328,6 @@ function App() {
     [],
   )
 
-  const fetchDayImages = useCallback(
-    async (habitId: string, date: string, accessToken: string) => {
-      const [entryImages, visionImagesData] = await Promise.all([
-        apiCall<{ images: StoredImage[] }>(`/api/habits/${habitId}/entries/${date}/images`, { token: accessToken }),
-        apiCall<{ images: StoredImage[] }>(`/api/habits/${habitId}/visions/${date}/images`, { token: accessToken }),
-      ])
-      setDayImages(entryImages.images)
-      setVisionImages(visionImagesData.images)
-    },
-    [],
-  )
-
   useEffect(() => {
     if (token) localStorage.setItem(TOKEN_STORAGE_KEY, token)
     else localStorage.removeItem(TOKEN_STORAGE_KEY)
@@ -294,6 +337,19 @@ function App() {
     document.documentElement.setAttribute('data-theme', theme)
     localStorage.setItem(THEME_STORAGE_KEY, theme)
   }, [theme])
+
+  useEffect(() => {
+    if (!dayItemModal.isOpen) setWritingModeField(null)
+  }, [dayItemModal.isOpen])
+
+  useEffect(() => {
+    setWritingModeField(null)
+  }, [dayItemModal.type, dayItemModal.mode, dayItemModal.itemId, dayItemModal.date])
+
+  useEffect(() => {
+    if (writingModeField === 'eventNote') eventWritingRef.current?.focus()
+    if (writingModeField === 'visionDescription') visionWritingRef.current?.focus()
+  }, [writingModeField])
 
   useEffect(
     () => () => {
@@ -346,6 +402,22 @@ function App() {
     }
     void run()
   }, [activeHabitId, token, refreshYearData])
+
+  useEffect(() => {
+    const run = async () => {
+      if (activeView !== 'archived' || !token) return
+      try {
+        setLoadingArchived(true)
+        await refreshArchivedHabits(token)
+        setApiError(null)
+      } catch (error) {
+        setApiError(error instanceof Error ? error.message : 'Unable to load archived habits')
+      } finally {
+        setLoadingArchived(false)
+      }
+    }
+    void run()
+  }, [activeView, token, refreshArchivedHabits])
 
   const handleAuthSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -457,20 +529,23 @@ function App() {
   const createHabit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!token) return
-    const name = habitName.trim()
+    const name = createHabitModal.habitName.trim()
     if (!name) return
     try {
+      setCreatingHabit(true)
       const data = await apiCall<{ habit: Habit }>('/api/habits', {
         method: 'POST',
         token,
-        body: JSON.stringify({ name, color: habitColor }),
+        body: JSON.stringify({ name, color: createHabitModal.habitColor }),
       })
       setHabits((current) => [...current, data.habit])
       setSelectedHabitId(data.habit.id)
-      setHabitName('')
+      createHabitModal.closeCreateHabitModal()
       setApiError(null)
     } catch (error) {
       setApiError(error instanceof Error ? error.message : 'Unable to create habit')
+    } finally {
+      setCreatingHabit(false)
     }
   }
 
@@ -483,8 +558,10 @@ function App() {
       setVisions([])
       setSelectedDate(null)
       setApiError(null)
+      return true
     } catch (error) {
       setApiError(error instanceof Error ? error.message : 'Unable to delete habit')
+      return false
     }
   }
 
@@ -520,6 +597,48 @@ function App() {
     } catch (error) {
       setApiError(error instanceof Error ? error.message : 'Unable to update habit')
       setUpdatingHabit(false)
+    }
+  }
+
+  const deleteEditingHabit = async () => {
+    if (!editingHabitId || !token) return
+    try {
+      setDeletingHabit(true)
+      const removed = await removeHabit(editingHabitId)
+      if (removed) closeEditHabitModal()
+    } finally {
+      setDeletingHabit(false)
+    }
+  }
+
+  const archiveEditingHabit = async () => {
+    if (!editingHabitId || !token) return
+    try {
+      setArchivingHabit(true)
+      await apiCall<{ habit: Habit }>(`/api/habits/${editingHabitId}/archive`, { method: 'POST', token })
+      await refreshHabitsWithToken(token)
+      await refreshArchivedHabits(token)
+      setEntries([])
+      setVisions([])
+      setSelectedDate(null)
+      setApiError(null)
+      closeEditHabitModal()
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'Unable to archive habit')
+    } finally {
+      setArchivingHabit(false)
+    }
+  }
+
+  const restoreArchivedHabit = async (habitId: string) => {
+    if (!token) return
+    try {
+      await apiCall<{ habit: Habit }>(`/api/habits/${habitId}/restore`, { method: 'POST', token })
+      await refreshHabitsWithToken(token)
+      await refreshArchivedHabits(token)
+      setApiError(null)
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'Unable to restore habit')
     }
   }
 
@@ -561,423 +680,835 @@ function App() {
 
   const openDayEditor = async (date: string) => {
     setSelectedDate(date)
-    const dayEntry = entriesByDate.get(date)
-    const dayVision = visionsByDate.get(date)
-    setDayEditorMode(dayVision && !hasProgress(dayEntry) ? 'vision' : 'event')
-    setDraftCompleted(dayEntry?.completed ?? false)
-    setDraftNote(dayEntry?.note ?? '')
-    setDraftVisionTitle(dayVision?.title ?? '')
-    setDraftVisionDescription(dayVision?.description ?? '')
-    setSelectedImageFile(null)
-    setSelectedVisionImageFile(null)
-    if (!activeHabitId || !token) {
-      setDayImages([])
-      setVisionImages([])
+    setApiError(null)
+  }
+
+  const openCreateEventModal = (date: string) => {
+    setDraftCompleted(false)
+    setDraftNote('')
+    setDraftEntryColor('')
+    setWritingModeField(null)
+    setQueuedModalFiles([])
+    dayItemModal.openCreateEvent(date)
+  }
+
+  const openEditEventModal = (entry: HabitEntry) => {
+    setDraftCompleted(entry.completed)
+    setDraftNote(entry.note ?? '')
+    setDraftEntryColor(entry.customColor ?? '')
+    setWritingModeField(null)
+    setQueuedModalFiles([])
+    dayItemModal.openEditEvent(entry.date, entry.id)
+    void fetchEntryImagesForItem(entry.date, entry.id)
+  }
+
+  const openCreateVisionModal = (date: string) => {
+    setDraftVisionTitle('')
+    setDraftVisionDescription('')
+    setDraftVisionColor('')
+    setWritingModeField(null)
+    setQueuedModalFiles([])
+    dayItemModal.openCreateVision(date)
+  }
+
+  const openEditVisionModal = (vision: Vision) => {
+    setDraftVisionTitle(vision.title ?? '')
+    setDraftVisionDescription(vision.description ?? '')
+    setDraftVisionColor(vision.customColor ?? '')
+    setWritingModeField(null)
+    setQueuedModalFiles([])
+    dayItemModal.openEditVision(vision.date, vision.id)
+    void fetchVisionImagesForItem(vision.date, vision.id)
+  }
+
+  const closeDayItemModal = useCallback(() => {
+    setWritingModeField(null)
+    setQueuedModalFiles([])
+    dayItemModal.close()
+  }, [dayItemModal])
+
+  const closeWritingMode = useCallback(() => {
+    setWritingModeField(null)
+  }, [])
+
+  const handleWritingModeKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    closeWritingMode()
+  }, [closeWritingMode])
+
+  const fetchEntryImagesForItem = useCallback(
+    async (date: string, entryId: string) => {
+      if (!activeHabitId || !token) return
+      try {
+        const data = await apiCall<{ images: StoredImage[] }>(`/api/habits/${activeHabitId}/entries/${date}/${entryId}/images`, { token })
+        setEntryImagesByEntryId((previous) => {
+          const next = new Map(previous)
+          next.set(entryId, data.images)
+          return next
+        })
+      } catch {
+        // Keep UI resilient if an item is deleted while fetching.
+      }
+    },
+    [activeHabitId, token],
+  )
+
+  const fetchVisionImagesForItem = useCallback(
+    async (date: string, visionId: string) => {
+      if (!activeHabitId || !token) return
+      try {
+        const data = await apiCall<{ images: StoredImage[] }>(`/api/habits/${activeHabitId}/visions/${date}/${visionId}/images`, { token })
+        setVisionImagesByVisionId((previous) => {
+          const next = new Map(previous)
+          next.set(visionId, data.images)
+          return next
+        })
+      } catch {
+        // Keep UI resilient if an item is deleted while fetching.
+      }
+    },
+    [activeHabitId, token],
+  )
+
+  const uploadItemImages = useCallback(
+    async (params: { type: 'event' | 'vision'; date: string; itemId: string; files: File[] }) => {
+      if (!activeHabitId || !token || params.files.length === 0) return
+      for (const file of params.files) {
+        const formData = new FormData()
+        formData.append('image', file)
+        if (params.type === 'event') {
+          await apiCall(`/api/habits/${activeHabitId}/entries/${params.date}/${params.itemId}/images`, {
+            method: 'POST',
+            token,
+            body: formData,
+          })
+        } else {
+          await apiCall(`/api/habits/${activeHabitId}/visions/${params.date}/${params.itemId}/images`, {
+            method: 'POST',
+            token,
+            body: formData,
+          })
+        }
+      }
+      if (params.type === 'event') {
+        await fetchEntryImagesForItem(params.date, params.itemId)
+      } else {
+        await fetchVisionImagesForItem(params.date, params.itemId)
+      }
+      await refreshYearData(activeHabitId, token)
+    },
+    [activeHabitId, token, fetchEntryImagesForItem, fetchVisionImagesForItem, refreshYearData],
+  )
+
+  const handleModalImageSelection = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? [])
+    event.target.value = ''
+    if (files.length === 0 || !dayItemModal.date) return
+
+    if (dayItemModal.mode === 'create') {
+      setQueuedModalFiles((previous) => [...previous, ...files])
       return
     }
+    if (!dayItemModal.itemId) return
+
     try {
-      await fetchDayImages(activeHabitId, date, token)
+      setUploadingModalImages(true)
+      await uploadItemImages({
+        type: dayItemModal.type,
+        date: dayItemModal.date,
+        itemId: dayItemModal.itemId,
+        files,
+      })
       setApiError(null)
     } catch (error) {
-      setDayImages([])
-      setVisionImages([])
-      setApiError(error instanceof Error ? error.message : 'Unable to load day images')
+      setApiError(error instanceof Error ? error.message : 'Unable to upload images')
+    } finally {
+      setUploadingModalImages(false)
+    }
+  }
+
+  const removeQueuedModalFile = (index: number) => {
+    setQueuedModalFiles((previous) => previous.filter((_, itemIndex) => itemIndex !== index))
+  }
+
+  const deleteModalImage = async (imageId: string) => {
+    if (!activeHabitId || !token || !dayItemModal.date || !dayItemModal.itemId || dayItemModal.mode !== 'edit') return
+    try {
+      setDeletingModalImageId(imageId)
+      if (dayItemModal.type === 'event') {
+        await apiCall(`/api/habits/${activeHabitId}/entries/${dayItemModal.date}/${dayItemModal.itemId}/images/${imageId}`, { method: 'DELETE', token })
+        await fetchEntryImagesForItem(dayItemModal.date, dayItemModal.itemId)
+      } else {
+        await apiCall(`/api/habits/${activeHabitId}/visions/${dayItemModal.date}/${dayItemModal.itemId}/images/${imageId}`, { method: 'DELETE', token })
+        await fetchVisionImagesForItem(dayItemModal.date, dayItemModal.itemId)
+      }
+      await refreshYearData(activeHabitId, token)
+      setApiError(null)
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'Unable to delete image')
+    } finally {
+      setDeletingModalImageId(null)
     }
   }
 
   const saveDayEntry = async () => {
-    if (!activeHabitId || !selectedDate || !token) return
+    if (!activeHabitId || !dayItemModal.date || !token) return
     try {
-      await apiCall<{ entry: HabitEntry | null }>(`/api/habits/${activeHabitId}/entries/${selectedDate}`, {
-        method: 'PUT',
+      const method = dayItemModal.mode === 'edit' ? 'PATCH' : 'POST'
+      const path =
+        dayItemModal.mode === 'edit' && dayItemModal.itemId
+          ? `/api/habits/${activeHabitId}/entries/${dayItemModal.date}/${dayItemModal.itemId}`
+          : `/api/habits/${activeHabitId}/entries/${dayItemModal.date}`
+      const response = await apiCall<{ entry: HabitEntry | null }>(path, {
+        method,
         token,
-        body: JSON.stringify({ completed: draftCompleted, note: draftNote.trim() }),
+        body: JSON.stringify({ completed: draftCompleted, note: draftNote.trim(), customColor: draftEntryColor.trim() || null }),
       })
+      const targetEntryId = dayItemModal.mode === 'edit' ? dayItemModal.itemId : response.entry?.id
+      if (targetEntryId && queuedModalFiles.length > 0) {
+        setUploadingModalImages(true)
+        await uploadItemImages({
+          type: 'event',
+          date: dayItemModal.date,
+          itemId: targetEntryId,
+          files: queuedModalFiles,
+        })
+      }
       await refreshYearData(activeHabitId, token)
+      closeDayItemModal()
       setApiError(null)
     } catch (error) {
       setApiError(error instanceof Error ? error.message : 'Unable to save day entry')
+    } finally {
+      setUploadingModalImages(false)
     }
   }
 
   const saveDayVision = async () => {
-    if (!activeHabitId || !selectedDate || !token) return
+    if (!activeHabitId || !dayItemModal.date || !token) return
     const title = draftVisionTitle.trim()
     if (!title) {
       setApiError('Vision title is required')
       return
     }
     try {
-      await apiCall<{ vision: Vision }>(`/api/habits/${activeHabitId}/visions/${selectedDate}`, {
-        method: 'PUT',
+      const method = dayItemModal.mode === 'edit' ? 'PATCH' : 'POST'
+      const path =
+        dayItemModal.mode === 'edit' && dayItemModal.itemId
+          ? `/api/habits/${activeHabitId}/visions/${dayItemModal.date}/${dayItemModal.itemId}`
+          : `/api/habits/${activeHabitId}/visions/${dayItemModal.date}`
+      const response = await apiCall<{ vision: Vision }>(path, {
+        method,
         token,
-        body: JSON.stringify({ title, description: draftVisionDescription.trim() }),
+        body: JSON.stringify({ title, description: draftVisionDescription.trim(), customColor: draftVisionColor.trim() || null }),
       })
+      const targetVisionId = dayItemModal.mode === 'edit' ? dayItemModal.itemId : response.vision?.id
+      if (targetVisionId && queuedModalFiles.length > 0) {
+        setUploadingModalImages(true)
+        await uploadItemImages({
+          type: 'vision',
+          date: dayItemModal.date,
+          itemId: targetVisionId,
+          files: queuedModalFiles,
+        })
+      }
       await refreshYearData(activeHabitId, token)
-      await fetchDayImages(activeHabitId, selectedDate, token)
+      closeDayItemModal()
       setApiError(null)
     } catch (error) {
       setApiError(error instanceof Error ? error.message : 'Unable to save vision')
+    } finally {
+      setUploadingModalImages(false)
     }
   }
 
   const deleteDayVision = async () => {
-    if (!activeHabitId || !selectedDate || !token) return
+    if (!activeHabitId || !dayItemModal.date || !dayItemModal.itemId || !token) return
     try {
-      await apiCall(`/api/habits/${activeHabitId}/visions/${selectedDate}`, { method: 'DELETE', token })
-      setDraftVisionTitle('')
-      setDraftVisionDescription('')
-      setVisionImages([])
+      await apiCall(`/api/habits/${activeHabitId}/visions/${dayItemModal.date}/${dayItemModal.itemId}`, { method: 'DELETE', token })
       await refreshYearData(activeHabitId, token)
+      closeDayItemModal()
       setApiError(null)
     } catch (error) {
       setApiError(error instanceof Error ? error.message : 'Unable to delete vision')
     }
   }
 
-  const uploadEntryImage = async () => {
-    if (!token || !activeHabitId || !selectedDate || !selectedImageFile) return
+  const deleteDayEntry = async () => {
+    if (!activeHabitId || !dayItemModal.date || !dayItemModal.itemId || !token) return
     try {
-      setUploadingImage(true)
-      const formData = new FormData()
-      formData.append('image', selectedImageFile)
-      await apiCall<{ image: StoredImage }>(`/api/habits/${activeHabitId}/entries/${selectedDate}/images`, {
-        method: 'POST',
-        token,
-        body: formData,
-      })
-      setSelectedImageFile(null)
-      await fetchDayImages(activeHabitId, selectedDate, token)
+      await apiCall(`/api/habits/${activeHabitId}/entries/${dayItemModal.date}/${dayItemModal.itemId}`, { method: 'DELETE', token })
       await refreshYearData(activeHabitId, token)
+      closeDayItemModal()
       setApiError(null)
     } catch (error) {
-      setApiError(error instanceof Error ? error.message : 'Unable to upload day image')
-    } finally {
-      setUploadingImage(false)
+      setApiError(error instanceof Error ? error.message : 'Unable to delete day entry')
     }
   }
+  const canMoveTimelineBackward = timelineCenterDate > yearStartDate
+  const canMoveTimelineForward = timelineCenterDate < yearEndDate
+  const selectedDayEntries = useMemo(
+    () => (selectedDate ? entries.filter((entry) => entry.date === selectedDate) : []),
+    [selectedDate, entries],
+  )
+  const selectedDayVisions = useMemo(
+    () => (selectedDate ? visions.filter((vision) => vision.date === selectedDate) : []),
+    [selectedDate, visions],
+  )
+  const modalImages =
+    dayItemModal.mode === 'edit' && dayItemModal.itemId
+      ? dayItemModal.type === 'event'
+        ? (entryImagesByEntryId.get(dayItemModal.itemId) ?? [])
+        : (visionImagesByVisionId.get(dayItemModal.itemId) ?? [])
+      : []
 
-  const deleteEntryImageById = async (imageId: string) => {
-    if (!token || !activeHabitId || !selectedDate) return
-    try {
-      await apiCall(`/api/habits/${activeHabitId}/entries/${selectedDate}/images/${imageId}`, {
-        method: 'DELETE',
-        token,
-      })
-      await fetchDayImages(activeHabitId, selectedDate, token)
-      await refreshYearData(activeHabitId, token)
-      setApiError(null)
-    } catch (error) {
-      setApiError(error instanceof Error ? error.message : 'Unable to delete day image')
-    }
+  useEffect(() => {
+    if (!selectedDate || !activeHabitId || !token) return
+    void Promise.all([
+      ...selectedDayEntries.map((entry) => fetchEntryImagesForItem(entry.date, entry.id)),
+      ...selectedDayVisions.map((vision) => fetchVisionImagesForItem(vision.date, vision.id)),
+    ])
+  }, [selectedDate, activeHabitId, token, selectedDayEntries, selectedDayVisions, fetchEntryImagesForItem, fetchVisionImagesForItem])
+  const moveTimelineByDay = (direction: -1 | 1) => {
+    const nextDate = addDays(timelineCenterDate, direction)
+    if (nextDate < yearStartDate || nextDate > yearEndDate) return
+    void openDayEditor(format(nextDate, 'yyyy-MM-dd'))
   }
-
-  const uploadVisionImage = async () => {
-    if (!token || !activeHabitId || !selectedDate || !selectedVisionImageFile) return
-    if (!draftVisionTitle.trim() && !visionsByDate.get(selectedDate)) {
-      setApiError('Create/save the vision first before uploading images')
-      return
-    }
-    try {
-      setUploadingVisionImage(true)
-      const formData = new FormData()
-      formData.append('image', selectedVisionImageFile)
-      await apiCall<{ image: StoredImage }>(`/api/habits/${activeHabitId}/visions/${selectedDate}/images`, {
-        method: 'POST',
-        token,
-        body: formData,
-      })
-      setSelectedVisionImageFile(null)
-      await fetchDayImages(activeHabitId, selectedDate, token)
-      await refreshYearData(activeHabitId, token)
-      setApiError(null)
-    } catch (error) {
-      setApiError(error instanceof Error ? error.message : 'Unable to upload vision image')
-    } finally {
-      setUploadingVisionImage(false)
-    }
-  }
-
-  const deleteVisionImageById = async (imageId: string) => {
-    if (!token || !activeHabitId || !selectedDate) return
-    try {
-      await apiCall(`/api/habits/${activeHabitId}/visions/${selectedDate}/images/${imageId}`, {
-        method: 'DELETE',
-        token,
-      })
-      await fetchDayImages(activeHabitId, selectedDate, token)
-      await refreshYearData(activeHabitId, token)
-      setApiError(null)
-    } catch (error) {
-      setApiError(error instanceof Error ? error.message : 'Unable to delete vision image')
-    }
-  }
-
-  const handleImageSelection = (event: ChangeEvent<HTMLInputElement>) =>
-    setSelectedImageFile(event.target.files?.[0] ?? null)
-  const handleVisionImageSelection = (event: ChangeEvent<HTMLInputElement>) =>
-    setSelectedVisionImageFile(event.target.files?.[0] ?? null)
 
   return (
     <main className="app-shell">
-      <nav className="top-nav">
-        <span className="top-nav-title">Mori</span>
-        <div className="top-nav-right">
-          {authUser ? (
-            <div className="auth-bar">
-              <button type="button" className="avatar-button" onClick={openProfileModal} aria-label="Edit profile picture">
-                {authUser.profileImageUrl ? (
-                  <img src={authUser.profileImageUrl} alt={`${authUser.email} profile`} />
-                ) : (
-                  <span className="avatar-fallback">{authUser.email.slice(0, 1).toUpperCase()}</span>
-                )}
-              </button>
-              <span>{authUser.email}</span>
-              <button type="button" className="ghost" onClick={logout}>
-                Logout
-              </button>
-            </div>
-          ) : null}
-          <button type="button" className="ghost theme-toggle" onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}>
-            {theme === 'dark' ? 'Switch to light' : 'Switch to dark'}
-          </button>
-        </div>
-      </nav>
-      <header>
-        {apiError ? <p className="error">{apiError}</p> : null}
-      </header>
-
       {!authUser ? (
-        <section className="panel auth-panel">
-          <h2>{authMode === 'signup' ? 'Create account' : 'Login'}</h2>
-          <form className="auth-form" onSubmit={handleAuthSubmit}>
-            <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" autoComplete="email" required />
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="Password"
-              autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
-              minLength={8}
-              required
-            />
-            <button type="submit" disabled={authActionLoading || authLoading}>
-              {authActionLoading ? 'Please wait...' : authMode === 'signup' ? 'Sign up' : 'Login'}
-            </button>
-          </form>
-          <p className="muted">
-            {authMode === 'signup' ? 'Already have an account?' : 'Need an account?'}{' '}
-            <button type="button" className="inline-link" onClick={() => setAuthMode((m) => (m === 'signup' ? 'login' : 'signup'))}>
-              {authMode === 'signup' ? 'Login here' : 'Sign up here'}
-            </button>
-          </p>
-        </section>
-      ) : null}
-
-      {authUser ? (
         <>
-          <section className="panel">
-            <h2>Create habit</h2>
-            <form className="habit-form" onSubmit={createHabit}>
-              <input value={habitName} onChange={(event) => setHabitName(event.target.value)} placeholder="Habit name (Running, Quran, Content...)" aria-label="Habit name" />
-              <label className="color-input">
-                Color
-                <input type="color" value={habitColor} onChange={(event) => setHabitColor(event.target.value)} aria-label="Habit color" />
-              </label>
-              <button type="submit">Add habit</button>
+          <header>
+            {apiError ? <p className="error">{apiError}</p> : null}
+          </header>
+          <section className="panel auth-panel">
+            <h2>{authMode === 'signup' ? 'Create account' : 'Login'}</h2>
+            <form className="auth-form" onSubmit={handleAuthSubmit}>
+              <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" autoComplete="email" required />
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="Password"
+                autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
+                minLength={8}
+                required
+              />
+              <button type="submit" disabled={authActionLoading || authLoading}>
+                {authActionLoading ? 'Please wait...' : authMode === 'signup' ? 'Sign up' : 'Login'}
+              </button>
             </form>
+            <p className="muted">
+              {authMode === 'signup' ? 'Already have an account?' : 'Need an account?'}{' '}
+              <button type="button" className="inline-link" onClick={() => setAuthMode((m) => (m === 'signup' ? 'login' : 'signup'))}>
+                {authMode === 'signup' ? 'Login here' : 'Sign up here'}
+              </button>
+            </p>
           </section>
+        </>
+      ) : (
+        <div className="app-layout">
+          <aside className="panel app-sidebar">
+            <div className="sidebar-logo">Mori</div>
+            <nav className="sidebar-nav" aria-label="Main navigation">
+              <button
+                type="button"
+                className={`sidebar-nav-link ${activeView === 'main' ? 'active' : ''}`}
+                onClick={() => setActiveView('main')}
+              >
+                Habits
+              </button>
+              <button
+                type="button"
+                className={`sidebar-nav-link ${activeView === 'archived' ? 'active' : ''}`}
+                onClick={() => setActiveView('archived')}
+              >
+                Archived
+              </button>
+            </nav>
+            {activeView === 'main' ? (
+              <section className="sidebar-section habits-panel">
+                <h2>Your habits</h2>
+                {loadingHabits ? <p className="muted">Loading habits...</p> : null}
+                {!loadingHabits ? (
+                  <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleHabitDragEnd}>
+                    <SortableContext items={habits.map((habit) => habit.id)} strategy={verticalListSortingStrategy}>
+                      <ul className="habit-list">
+                        {habits.map((habit) => (
+                          <SortableHabitItem
+                            key={habit.id}
+                            habit={habit}
+                            isActive={habit.id === activeHabitId}
+                            onSelect={setSelectedHabitId}
+                          />
+                        ))}
+                        <li className="habit-row">
+                          <button
+                            type="button"
+                            className="habit-item habit-add-item"
+                            onClick={createHabitModal.openCreateHabitModal}
+                            aria-label="Create a new habit"
+                          >
+                            <span className="habit-add-plus" aria-hidden="true">+</span>
+                            <span className="habit-name">Add habit</span>
+                          </button>
+                        </li>
+                      </ul>
+                    </SortableContext>
+                  </DndContext>
+                ) : null}
+                {!loadingHabits && habits.length === 0 ? (
+                  <p className="muted">Click Add habit to create your first habit.</p>
+                ) : null}
+              </section>
+            ) : null}
+          </aside>
 
-          <section className="layout">
-            <aside className="panel habits-panel">
-              <h2>Your habits</h2>
-              {loadingHabits ? <p className="muted">Loading habits...</p> : null}
-              {!loadingHabits && habits.length === 0 ? <p className="muted">Create your first habit to start tracking.</p> : null}
-              {!loadingHabits && habits.length > 0 ? (
-                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleHabitDragEnd}>
-                  <SortableContext items={habits.map((habit) => habit.id)} strategy={verticalListSortingStrategy}>
-                    <ul className="habit-list">
-                      {habits.map((habit) => (
-                        <SortableHabitItem
-                          key={habit.id}
-                          habit={habit}
-                          isActive={habit.id === activeHabitId}
-                          onSelect={setSelectedHabitId}
-                          onDelete={removeHabit}
-                        />
+          <section className="app-main">
+            <header className="main-topbar">
+              <div className="main-topbar-left">
+                {apiError ? (
+                  <p className="error">{apiError}</p>
+                ) : activeView === 'archived' ? (
+                  <p className="muted">Archived habits</p>
+                ) : selectedHabit ? (
+                  <p className="muted">{selectedHabit.name} · {CURRENT_YEAR}</p>
+                ) : (
+                  <p className="muted">Select a habit to begin tracking</p>
+                )}
+              </div>
+              <div className="top-nav-right">
+                <button type="button" className="ghost theme-toggle" onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}>
+                  {theme === 'dark' ? 'Switch to light' : 'Switch to dark'}
+                </button>
+                <div className="auth-bar">
+                  <button type="button" className="avatar-button" onClick={openProfileModal} aria-label="Edit profile picture">
+                    {authUser.profileImageUrl ? (
+                      <img src={authUser.profileImageUrl} alt={`${authUser.email} profile`} />
+                    ) : (
+                      <span className="avatar-fallback">{authUser.email.slice(0, 1).toUpperCase()}</span>
+                    )}
+                  </button>
+                  <button type="button" className="ghost" onClick={logout}>
+                    Logout
+                  </button>
+                </div>
+              </div>
+            </header>
+
+            <div className="main-content">
+              {activeView === 'archived' ? (
+                <section className="panel archived-panel">
+                  <h2>Archived habits</h2>
+                  <p className="muted">Habits you archived are listed below. Restore them to bring them back to your active habits.</p>
+                  {loadingArchived ? <p className="muted">Loading archived habits...</p> : null}
+                  {!loadingArchived && archivedHabits.length === 0 ? (
+                    <p className="muted">No archived habits yet.</p>
+                  ) : null}
+                  {!loadingArchived && archivedHabits.length > 0 ? (
+                    <ul className="archived-habit-list">
+                      {archivedHabits.map((habit) => (
+                        <li key={habit.id} className="archived-habit-row">
+                          <span className="habit-color" style={{ backgroundColor: habit.color }} />
+                          <span className="habit-name">{habit.name}</span>
+                          <button
+                            type="button"
+                            className="archive-btn"
+                            onClick={() => restoreArchivedHabit(habit.id)}
+                          >
+                            Restore
+                          </button>
+                        </li>
                       ))}
                     </ul>
-                  </SortableContext>
-                </DndContext>
-              ) : null}
-            </aside>
-
-            <section className="panel tracker-panel">
-              {!selectedHabit ? <p className="muted">Select a habit to view its year heatmap.</p> : null}
-              {selectedHabit && loadingYearData ? <p className="muted">Loading year data...</p> : null}
-              {selectedHabit && !loadingYearData ? (
+                  ) : null}
+                </section>
+              ) : (
                 <>
-                  <div className="tracker-header">
-                    <div>
-                      <div className="habit-title-row">
-                        <h2>{selectedHabit.name}</h2>
-                        <button type="button" className="ghost icon-btn" onClick={() => openEditHabitModal(selectedHabit)} aria-label={`Edit ${selectedHabit.name}`}>
-                          <span aria-hidden="true">✎</span>
-                        </button>
+              <section className="panel tracker-panel">
+                {!selectedHabit ? <p className="muted">Select a habit to view its year heatmap.</p> : null}
+                {selectedHabit && loadingYearData ? <p className="muted">Loading year data...</p> : null}
+                {selectedHabit && !loadingYearData ? (
+                  <>
+                    <div className="tracker-header">
+                      <div>
+                        <div className="habit-title-row">
+                          <h2>{selectedHabit.name}</h2>
+                          <button type="button" className="ghost icon-btn" onClick={() => openEditHabitModal(selectedHabit)} aria-label={`Edit ${selectedHabit.name}`}>
+                            <span aria-hidden="true">✎</span>
+                          </button>
+                        </div>
+                        <p>{CURRENT_YEAR} view</p>
                       </div>
-                      <p>{CURRENT_YEAR} view</p>
+                      <div className="stats">
+                        <span>{stats.completedDays} days done</span>
+                        <span>{stats.currentStreak} day streak</span>
+                        <span>{stats.longestStreak} best streak</span>
+                      </div>
                     </div>
-                    <div className="stats">
-                      <span>{stats.completedDays} days done</span>
-                      <span>{stats.currentStreak} day streak</span>
-                      <span>{stats.longestStreak} best streak</span>
+                    <div className="weekday-labels">
+                      <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
                     </div>
-                  </div>
-                  <div className="weekday-labels">
-                    <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
-                  </div>
-                  <div className="heatmap-area">
-                    <div className="month-labels" style={{ '--heatmap-columns': heatmapColumns } as CSSProperties}>
-                      {monthMarkers.map((marker) => (
-                        <span key={marker.label} style={{ gridColumnStart: marker.columnStart }}>
-                          {marker.label}
-                        </span>
-                      ))}
-                    </div>
-                    <div className="heatmap-grid">
-                      {Array.from({ length: yearStartOffset }).map((_, index) => <div key={`empty-${index}`} className="heatmap-cell placeholder" />)}
-                      {yearDays.map((day) => {
-                        const key = format(day, 'yyyy-MM-dd')
-                        const entry = entriesByDate.get(key)
-                        const vision = visionsByDate.get(key)
-                        const done = hasProgress(entry)
-                        const isToday = key === todayKey
-                        const isPastWithoutProgress = key < todayKey && !done && !vision
-                        const hasEntryDetail = Boolean(entry?.note.trim() || Number(entry?.imageCount ?? 0) > 0)
-                        const hasVisionDetail = Boolean(vision?.imageCount || vision?.description?.trim())
-                        let style: CSSProperties | undefined
-                        if (done && vision) {
-                          style = { background: `linear-gradient(135deg, ${selectedHabit.color} 0 50%, ${VISION_COLOR} 50% 100%)` }
-                        } else if (done) {
-                          style = { backgroundColor: selectedHabit.color }
-                        } else if (vision) {
-                          style = { backgroundColor: VISION_COLOR }
-                        }
-                        return (
-                          <button
-                            key={key}
-                            type="button"
-                            className={`heatmap-cell ${done ? 'done' : ''} ${vision ? 'vision' : ''} ${hasEntryDetail || hasVisionDetail ? 'note' : ''} ${isPastWithoutProgress ? 'elapsed-empty' : ''} ${isToday ? 'today' : ''}`}
-                            style={style}
-                            onClick={() => openDayEditor(key)}
-                            title={`${format(day, 'MMM d')}${done ? ' - progress' : ''}${vision ? ' - vision' : ''}`}
-                          />
-                        )
-                      })}
-                    </div>
-                  </div>
-                </>
-              ) : null}
-            </section>
-          </section>
-
-          {selectedDate && selectedHabit ? (
-            <section className="panel day-editor">
-              <h3>{format(parseISO(selectedDate), 'EEEE, MMMM d, yyyy')}</h3>
-              <div className="day-editor-toggle" role="tablist" aria-label="Day editor mode">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={dayEditorMode === 'event'}
-                  className={`ghost ${dayEditorMode === 'event' ? 'active' : ''}`}
-                  onClick={() => setDayEditorMode('event')}
-                >
-                  Event
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={dayEditorMode === 'vision'}
-                  className={`ghost ${dayEditorMode === 'vision' ? 'active' : ''}`}
-                  onClick={() => setDayEditorMode('vision')}
-                >
-                  Vision
-                </button>
-              </div>
-
-              {dayEditorMode === 'event' ? (
-                <>
-                  <label className="check-row">
-                    <input type="checkbox" checked={draftCompleted} onChange={(event) => setDraftCompleted(event.target.checked)} />
-                    Mark progress for this day
-                  </label>
-                  <label className="notes">
-                    Notes
-                    <textarea value={draftNote} onChange={(event) => setDraftNote(event.target.value)} placeholder="What did you do today?" />
-                  </label>
-
-                  <div className="images-section">
-                    <h4>Entry images (max 8MB each)</h4>
-                    <div className="image-upload-row">
-                      <input type="file" accept="image/*" onChange={handleImageSelection} />
-                      <button type="button" onClick={uploadEntryImage} disabled={!selectedImageFile || uploadingImage}>
-                        {uploadingImage ? 'Uploading...' : 'Upload entry image'}
-                      </button>
-                    </div>
-                    {dayImages.length === 0 ? <p className="muted">No entry images added yet.</p> : null}
-                    {dayImages.length > 0 ? (
-                      <div className="image-grid">
-                        {dayImages.map((image) => (
-                          <figure key={image.id} className="image-card">
-                            <img src={image.url} alt={image.originalName} />
-                            <figcaption>{image.originalName}</figcaption>
-                            <button type="button" className="ghost" onClick={() => deleteEntryImageById(image.id)}>Remove</button>
-                          </figure>
+                    <div className="heatmap-area">
+                      <div className="month-labels" style={{ '--heatmap-columns': heatmapColumns } as CSSProperties}>
+                        {monthMarkers.map((marker) => (
+                          <span key={marker.label} style={{ gridColumnStart: marker.columnStart }}>
+                            {marker.label}
+                          </span>
                         ))}
                       </div>
-                    ) : null}
+                      <div className="heatmap-grid">
+                        {Array.from({ length: yearStartOffset }).map((_, index) => <div key={`empty-${index}`} className="heatmap-cell placeholder" />)}
+                        {yearDays.map((day) => {
+                          const key = format(day, 'yyyy-MM-dd')
+                          const entry = entriesByDate.get(key)
+                          const vision = visionsByDate.get(key)
+                          const done = hasProgressForDay(entry)
+                          const isToday = key === todayKey
+                          const isPastWithoutProgress = key < todayKey && !done && !(vision && vision.length > 0)
+                          const hasEntryDetail = (entry ?? []).some((row) => Boolean(row.note.trim() || Number(row.imageCount ?? 0) > 0))
+                          const hasVisionDetail = (vision ?? []).some((row) => Boolean(row.imageCount || row.description?.trim()))
+                          const firstEntryColor = entry?.[0]?.customColor?.trim() || selectedHabit.color
+                          const firstVisionColor = vision?.[0]?.customColor?.trim() || VISION_COLOR
+                          let style: CSSProperties | undefined
+                          if (done && vision && vision.length > 0) {
+                            style = { background: `linear-gradient(135deg, ${firstEntryColor} 0 50%, ${firstVisionColor} 50% 100%)` }
+                          } else if (done) {
+                            style = { backgroundColor: firstEntryColor }
+                          } else if (vision && vision.length > 0) {
+                            style = { backgroundColor: firstVisionColor }
+                          }
+                          return (
+                            <button
+                              key={key}
+                              type="button"
+                              className={`heatmap-cell ${done ? 'done' : ''} ${vision && vision.length > 0 ? 'vision' : ''} ${hasEntryDetail || hasVisionDetail ? 'note' : ''} ${isPastWithoutProgress ? 'elapsed-empty' : ''} ${isToday ? 'today' : ''}`}
+                              style={style}
+                              onClick={() => openDayEditor(key)}
+                              title={`${format(day, 'MMM d')}${done ? ' - progress' : ''}${vision && vision.length > 0 ? ' - vision' : ''}`}
+                            />
+                          )
+                        })}
+                      </div>
+                    </div>
+                    <div className="timeline-panel">
+                      <div className="timeline-panel-header">
+                        <h3>Event timeline</h3>
+                        <p className="muted">{timelineEventCount} tracked day{timelineEventCount === 1 ? '' : 's'}</p>
+                      </div>
+                      <div className="timeline-controls">
+                        <button
+                          type="button"
+                          className="ghost icon-btn"
+                          onClick={() => moveTimelineByDay(-1)}
+                          disabled={!canMoveTimelineBackward}
+                          aria-label="Move timeline backward one day"
+                        >
+                          <span aria-hidden="true">←</span>
+                        </button>
+                        <div className="timeline-track" role="list" aria-label="Habit event timeline">
+                          {timelineWindow.map((day, index) => {
+                            if (!day) {
+                              return <div key={`timeline-empty-${index}`} className="timeline-node placeholder" aria-hidden="true" />
+                            }
+                            const key = format(day, 'yyyy-MM-dd')
+                            const entry = entriesByDate.get(key)
+                            const vision = visionsByDate.get(key)
+                            const done = hasProgressForDay(entry)
+                            const hasVision = Boolean(vision && vision.length > 0)
+                            const isCurrent = key === timelineCenterKey
+                            return (
+                              <button
+                                key={key}
+                                type="button"
+                                role="listitem"
+                                className={`timeline-node ${isCurrent ? 'current' : ''} ${done ? 'done' : ''} ${hasVision ? 'vision' : ''}`}
+                                onClick={() => openDayEditor(key)}
+                                title={`${format(day, 'EEEE, MMM d')}${done ? ' - progress' : ''}${hasVision ? ' - vision' : ''}`}
+                              >
+                                <span className="timeline-day">{format(day, 'EEE')}</span>
+                                <span className="timeline-date">{format(day, 'MMM d')}</span>
+                                <span className="timeline-dot" />
+                              </button>
+                            )
+                          })}
+                        </div>
+                        <button
+                          type="button"
+                          className="ghost icon-btn"
+                          onClick={() => moveTimelineByDay(1)}
+                          disabled={!canMoveTimelineForward}
+                          aria-label="Move timeline forward one day"
+                        >
+                          <span aria-hidden="true">→</span>
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                ) : null}
+              </section>
+
+              {selectedDate && selectedHabit ? (
+                <section className="panel day-editor">
+                  <h3>{format(parseISO(selectedDate), 'EEEE, MMMM d, yyyy')}</h3>
+                  <div className="actions">
+                    <button type="button" onClick={() => openCreateEventModal(selectedDate)}>Add event</button>
+                    <button type="button" className="vision-btn" onClick={() => openCreateVisionModal(selectedDate)}>Add vision</button>
+                  </div>
+
+                  <div className="vision-section">
+                    <h4>Events</h4>
+                    {selectedDayEntries.length === 0 ? <p className="muted">No events for this day.</p> : null}
+                    {selectedDayEntries.map((entry) => (
+                      <div key={entry.id} className="day-item-card">
+                        <div className="day-item-row">
+                          <span className="habit-color" style={{ backgroundColor: entry.customColor || selectedHabit.color }} />
+                          <span className="habit-name">{entry.note?.trim() || (entry.completed ? 'Completed' : 'Event')}</span>
+                          <button type="button" className="ghost" onClick={() => openEditEventModal(entry)}>Edit</button>
+                        </div>
+                        {(entryImagesByEntryId.get(entry.id) ?? []).length > 0 ? (
+                          <div className="inline-image-grid">
+                            {(entryImagesByEntryId.get(entry.id) ?? []).map((image) => (
+                              <img key={image.id} src={image.url} alt={image.originalName} />
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="vision-section">
+                    <h4>Visions</h4>
+                    {selectedDayVisions.length === 0 ? <p className="muted">No visions for this day.</p> : null}
+                    {selectedDayVisions.map((vision) => (
+                      <div key={vision.id} className="day-item-card">
+                        <div className="day-item-row">
+                          <span className="habit-color" style={{ backgroundColor: vision.customColor || VISION_COLOR }} />
+                          <span className="habit-name">{vision.title}</span>
+                          <button type="button" className="ghost" onClick={() => openEditVisionModal(vision)}>Edit</button>
+                        </div>
+                        {(visionImagesByVisionId.get(vision.id) ?? []).length > 0 ? (
+                          <div className="inline-image-grid">
+                            {(visionImagesByVisionId.get(vision.id) ?? []).map((image) => (
+                              <img key={image.id} src={image.url} alt={image.originalName} />
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
                   </div>
 
                   <div className="actions">
-                    <button type="button" onClick={saveDayEntry}>Save day entry</button>
+                    <button type="button" className="ghost" onClick={() => setSelectedDate(null)}>Close</button>
                   </div>
-                </>
+                </section>
               ) : (
-                <div className="vision-section">
-                  <h4>Vision milestone (distinct purple on calendar)</h4>
-                  <input value={draftVisionTitle} onChange={(event) => setDraftVisionTitle(event.target.value)} placeholder="Vision title" />
-                  <textarea value={draftVisionDescription} onChange={(event) => setDraftVisionDescription(event.target.value)} placeholder="What does this milestone look like?" />
-                  <div className="actions">
-                    <button type="button" className="vision-btn" onClick={saveDayVision}>Save vision</button>
-                    <button type="button" className="ghost" onClick={deleteDayVision}>Delete vision</button>
-                  </div>
-                  <div className="image-upload-row">
-                    <input type="file" accept="image/*" onChange={handleVisionImageSelection} />
-                    <button type="button" className="vision-btn" onClick={uploadVisionImage} disabled={!selectedVisionImageFile || uploadingVisionImage}>
-                      {uploadingVisionImage ? 'Uploading...' : 'Upload vision image'}
+                <section className="panel day-editor day-editor-empty">
+                  <p className="muted">Pick a date from the heatmap to open the form.</p>
+                </section>
+              )}
+                </>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {dayItemModal.isOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className={`panel modal-panel ${isWritingModeOpen ? 'writing-mode-modal' : ''}`}
+            role="dialog"
+            aria-modal="true"
+            aria-label={dayItemModal.type === 'event' ? 'Edit event' : 'Edit vision'}
+          >
+            <div className="modal-header">
+              <h3>{dayItemModal.mode === 'create' ? `Create ${dayItemModal.type}` : `Edit ${dayItemModal.type}`}</h3>
+              <button type="button" className="ghost icon-btn" onClick={closeDayItemModal} aria-label="Close day item modal">
+                <span aria-hidden="true">×</span>
+              </button>
+            </div>
+            {isWritingModeOpen ? (
+              <div className="writing-mode-body">
+                <div className="writing-mode-header">
+                  <h4>{writingModeField === 'eventNote' ? 'Edit event notes' : 'Edit vision details'}</h4>
+                  <button
+                    type="button"
+                    className="ghost writing-mode-toggle"
+                    onClick={closeWritingMode}
+                    aria-label="Collapse writing area"
+                  >
+                    <span aria-hidden="true">⤡</span>
+                  </button>
+                </div>
+                {writingModeField === 'eventNote' ? (
+                  <textarea
+                    ref={eventWritingRef}
+                    className="writing-mode-textarea"
+                    value={draftNote}
+                    onChange={(event) => setDraftNote(event.target.value)}
+                    onKeyDown={handleWritingModeKeyDown}
+                    placeholder="What did you do today?"
+                  />
+                ) : (
+                  <textarea
+                    ref={visionWritingRef}
+                    className="writing-mode-textarea"
+                    value={draftVisionDescription}
+                    onChange={(event) => setDraftVisionDescription(event.target.value)}
+                    onKeyDown={handleWritingModeKeyDown}
+                    placeholder="What does this milestone look like?"
+                  />
+                )}
+                <div className="actions">
+                  <button type="button" className="ghost" onClick={closeWritingMode}>Done</button>
+                </div>
+              </div>
+            ) : dayItemModal.type === 'event' ? (
+              <div className="modal-form">
+                <label className="check-row">
+                  <input type="checkbox" checked={draftCompleted} onChange={(event) => setDraftCompleted(event.target.checked)} />
+                  Mark progress for this event
+                </label>
+                <label className="notes">
+                  <span className="notes-label-row">
+                    <span>Notes</span>
+                    <button
+                      type="button"
+                      className="ghost writing-mode-toggle"
+                      onClick={() => setWritingModeField('eventNote')}
+                      aria-label="Expand writing area"
+                    >
+                      <span aria-hidden="true">⤢</span>
                     </button>
+                  </span>
+                  <textarea value={draftNote} onChange={(event) => setDraftNote(event.target.value)} placeholder="What did you do today?" />
+                </label>
+                <label className="notes">
+                  Event color
+                  <input type="color" value={draftEntryColor || '#2f80ed'} onChange={(event) => setDraftEntryColor(event.target.value)} />
+                </label>
+                <div className="images-section">
+                  <h4>Images</h4>
+                  <div className="image-upload-row">
+                    <label className="ghost file-label">
+                      {uploadingModalImages ? 'Uploading...' : 'Upload image'}
+                      <input type="file" accept="image/*" onChange={handleModalImageSelection} disabled={uploadingModalImages} />
+                    </label>
                   </div>
-                  {visionImages.length === 0 ? <p className="muted">No vision images added yet.</p> : null}
-                  {visionImages.length > 0 ? (
+                  {queuedModalFiles.length > 0 ? (
+                    <div className="image-upload-row">
+                      {queuedModalFiles.map((file, index) => (
+                        <button key={`${file.name}-${index}`} type="button" className="ghost" onClick={() => removeQueuedModalFile(index)}>
+                          Remove queued: {file.name}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {modalImages.length > 0 ? (
                     <div className="image-grid">
-                      {visionImages.map((image) => (
+                      {modalImages.map((image) => (
                         <figure key={image.id} className="image-card">
                           <img src={image.url} alt={image.originalName} />
                           <figcaption>{image.originalName}</figcaption>
-                          <button type="button" className="ghost" onClick={() => deleteVisionImageById(image.id)}>Remove</button>
+                          {dayItemModal.mode === 'edit' ? (
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() => deleteModalImage(image.id)}
+                              disabled={deletingModalImageId === image.id}
+                            >
+                              {deletingModalImageId === image.id ? 'Removing...' : 'Remove'}
+                            </button>
+                          ) : null}
                         </figure>
                       ))}
                     </div>
                   ) : null}
                 </div>
-              )}
-
-              <div className="actions">
-                <button type="button" className="ghost" onClick={() => setSelectedDate(null)}>Close</button>
+                <div className="actions">
+                  <button type="button" onClick={saveDayEntry} disabled={uploadingModalImages}>{dayItemModal.mode === 'create' ? 'Create event' : 'Save event'}</button>
+                  {dayItemModal.mode === 'edit' ? (
+                    <button type="button" className="danger" onClick={deleteDayEntry}>Delete event</button>
+                  ) : null}
+                  <button type="button" className="ghost" onClick={closeDayItemModal}>Cancel</button>
+                </div>
               </div>
-            </section>
-          ) : null}
-        </>
+            ) : (
+              <div className="modal-form">
+                <label className="notes">
+                  Vision title
+                  <input value={draftVisionTitle} onChange={(event) => setDraftVisionTitle(event.target.value)} placeholder="Vision title" />
+                </label>
+                <label className="notes">
+                  <span className="notes-label-row">
+                    <span>Vision details</span>
+                    <button
+                      type="button"
+                      className="ghost writing-mode-toggle"
+                      onClick={() => setWritingModeField('visionDescription')}
+                      aria-label="Expand writing area"
+                    >
+                      <span aria-hidden="true">⤢</span>
+                    </button>
+                  </span>
+                  <textarea value={draftVisionDescription} onChange={(event) => setDraftVisionDescription(event.target.value)} placeholder="What does this milestone look like?" />
+                </label>
+                <label className="notes">
+                  Vision color
+                  <input type="color" value={draftVisionColor || '#8b5cf6'} onChange={(event) => setDraftVisionColor(event.target.value)} />
+                </label>
+                <div className="images-section">
+                  <h4>Images</h4>
+                  <div className="image-upload-row">
+                    <label className="ghost file-label">
+                      {uploadingModalImages ? 'Uploading...' : 'Upload image'}
+                      <input type="file" accept="image/*" onChange={handleModalImageSelection} disabled={uploadingModalImages} />
+                    </label>
+                  </div>
+                  {queuedModalFiles.length > 0 ? (
+                    <div className="image-upload-row">
+                      {queuedModalFiles.map((file, index) => (
+                        <button key={`${file.name}-${index}`} type="button" className="ghost" onClick={() => removeQueuedModalFile(index)}>
+                          Remove queued: {file.name}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {modalImages.length > 0 ? (
+                    <div className="image-grid">
+                      {modalImages.map((image) => (
+                        <figure key={image.id} className="image-card">
+                          <img src={image.url} alt={image.originalName} />
+                          <figcaption>{image.originalName}</figcaption>
+                          {dayItemModal.mode === 'edit' ? (
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() => deleteModalImage(image.id)}
+                              disabled={deletingModalImageId === image.id}
+                            >
+                              {deletingModalImageId === image.id ? 'Removing...' : 'Remove'}
+                            </button>
+                          ) : null}
+                        </figure>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="actions">
+                  <button type="button" className="vision-btn" onClick={saveDayVision} disabled={uploadingModalImages}>{dayItemModal.mode === 'create' ? 'Create vision' : 'Save vision'}</button>
+                  {dayItemModal.mode === 'edit' ? (
+                    <button type="button" className="danger" onClick={deleteDayVision}>Delete vision</button>
+                  ) : null}
+                  <button type="button" className="ghost" onClick={closeDayItemModal}>Cancel</button>
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
       ) : null}
 
       {editingHabit ? (
@@ -1000,7 +1531,50 @@ function App() {
               </label>
               <div className="actions">
                 <button type="submit" disabled={updatingHabit}>{updatingHabit ? 'Saving...' : 'Save changes'}</button>
+                <button type="button" className="archive-btn" onClick={archiveEditingHabit} disabled={archivingHabit || updatingHabit}>
+                  {archivingHabit ? 'Archiving...' : 'Archive habit'}
+                </button>
+                <button type="button" className="danger" onClick={deleteEditingHabit} disabled={deletingHabit || updatingHabit}>
+                  {deletingHabit ? 'Deleting...' : 'Delete habit'}
+                </button>
                 <button type="button" className="ghost" onClick={closeEditHabitModal}>Cancel</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
+
+      {createHabitModal.isCreateHabitModalOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="panel modal-panel" role="dialog" aria-modal="true" aria-label="Create habit">
+            <div className="modal-header">
+              <h3>Create habit</h3>
+              <button type="button" className="ghost icon-btn" onClick={createHabitModal.closeCreateHabitModal} aria-label="Close create habit modal">
+                <span aria-hidden="true">×</span>
+              </button>
+            </div>
+            <form className="modal-form" onSubmit={createHabit}>
+              <label className="notes">
+                Habit name
+                <input
+                  value={createHabitModal.habitName}
+                  onChange={(event) => createHabitModal.setHabitName(event.target.value)}
+                  placeholder="Habit name"
+                  required
+                />
+              </label>
+              <label className="color-input">
+                Color
+                <input
+                  type="color"
+                  value={createHabitModal.habitColor}
+                  onChange={(event) => createHabitModal.setHabitColor(event.target.value)}
+                  aria-label="Habit color"
+                />
+              </label>
+              <div className="actions">
+                <button type="submit" disabled={creatingHabit}>{creatingHabit ? 'Creating...' : 'Create habit'}</button>
+                <button type="button" className="ghost" onClick={createHabitModal.closeCreateHabitModal}>Cancel</button>
               </div>
             </form>
           </section>

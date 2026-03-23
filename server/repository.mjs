@@ -9,6 +9,7 @@ const toHabit = (row) => ({
   name: row.name,
   color: row.color,
   sortOrder: Number(row.sort_order ?? 0),
+  archivedAt: row.archived_at ?? null,
   createdAt: row.created_at,
 })
 
@@ -19,6 +20,7 @@ const toEntry = (row) => ({
   date: row.entry_date,
   completed: Boolean(row.completed),
   note: row.note ?? '',
+  customColor: row.custom_color ?? null,
   updatedAt: row.updated_at,
   imageCount: Number(row.image_count ?? 0),
 })
@@ -27,6 +29,7 @@ const toEntryImage = (row) => ({
   id: row.id,
   userId: row.user_id,
   habitId: row.habit_id,
+  entryId: row.entry_id,
   date: row.entry_date,
   storageKey: row.storage_key,
   url: row.url,
@@ -43,15 +46,22 @@ const toVision = (row) => ({
   date: row.target_date,
   title: row.title,
   description: row.description ?? '',
+  customColor: row.custom_color ?? null,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   imageCount: Number(row.image_count ?? 0),
 })
 
+const normalizeColor = (value) => {
+  const trimmed = String(value ?? '').trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
 const toVisionImage = (row) => ({
   id: row.id,
   userId: row.user_id,
   habitId: row.habit_id,
+  visionId: row.vision_id,
   date: row.target_date,
   storageKey: row.storage_key,
   url: row.url,
@@ -86,6 +96,30 @@ const addColumnIfMissing = async (table, columnDefinition) => {
   }
 }
 
+const dropIndexIfExists = async (table, indexName) => {
+  const db = await getDb()
+  const [rows] = await db.query(
+    `SELECT COUNT(1) AS count
+     FROM information_schema.statistics
+     WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?`,
+    [table, indexName],
+  )
+  if (Number(rows?.[0]?.count ?? 0) === 0) return
+  await db.query(`ALTER TABLE ${table} DROP INDEX ${indexName}`)
+}
+
+const addIndexIfMissing = async (table, indexName, indexColumns) => {
+  const db = await getDb()
+  const [rows] = await db.query(
+    `SELECT COUNT(1) AS count
+     FROM information_schema.statistics
+     WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?`,
+    [table, indexName],
+  )
+  if (Number(rows?.[0]?.count ?? 0) > 0) return
+  await db.query(`ALTER TABLE ${table} ADD INDEX ${indexName} (${indexColumns})`)
+}
+
 export const initSchema = async () => {
   const db = await getDb()
   await db.query(`
@@ -115,6 +149,7 @@ export const initSchema = async () => {
       name VARCHAR(120) NOT NULL,
       color VARCHAR(20) NOT NULL,
       sort_order INT NOT NULL DEFAULT 0,
+      archived_at DATETIME NULL,
       created_at DATETIME NOT NULL,
       INDEX idx_habits_user (user_id),
       CONSTRAINT fk_habits_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -128,10 +163,11 @@ export const initSchema = async () => {
       entry_date DATE NOT NULL,
       completed TINYINT(1) NOT NULL DEFAULT 0,
       note TEXT NULL,
+      custom_color VARCHAR(20) NULL,
       updated_at DATETIME NOT NULL,
       INDEX idx_entries_user (user_id),
-      CONSTRAINT fk_entries_habit FOREIGN KEY (habit_id) REFERENCES habits(id) ON DELETE CASCADE,
-      UNIQUE KEY uk_habit_day (habit_id, entry_date)
+      INDEX idx_entries_habit (habit_id),
+      CONSTRAINT fk_entries_habit FOREIGN KEY (habit_id) REFERENCES habits(id) ON DELETE CASCADE
     )
   `)
   await db.query(`
@@ -139,6 +175,7 @@ export const initSchema = async () => {
       id CHAR(36) PRIMARY KEY,
       user_id CHAR(36) NOT NULL,
       habit_id CHAR(36) NOT NULL,
+      entry_id CHAR(36) NOT NULL,
       entry_date DATE NOT NULL,
       storage_key VARCHAR(255) NOT NULL,
       url VARCHAR(512) NOT NULL,
@@ -146,7 +183,7 @@ export const initSchema = async () => {
       mime_type VARCHAR(120) NOT NULL,
       file_size INT UNSIGNED NOT NULL,
       created_at DATETIME NOT NULL,
-      INDEX idx_entry_images_lookup (user_id, habit_id, entry_date),
+      INDEX idx_entry_images_lookup (user_id, habit_id, entry_date, entry_id),
       CONSTRAINT fk_entry_images_habit FOREIGN KEY (habit_id) REFERENCES habits(id) ON DELETE CASCADE
     )
   `)
@@ -158,11 +195,12 @@ export const initSchema = async () => {
       target_date DATE NOT NULL,
       title VARCHAR(180) NOT NULL,
       description TEXT NULL,
+      custom_color VARCHAR(20) NULL,
       created_at DATETIME NOT NULL,
       updated_at DATETIME NOT NULL,
       INDEX idx_visions_user (user_id),
-      CONSTRAINT fk_visions_habit FOREIGN KEY (habit_id) REFERENCES habits(id) ON DELETE CASCADE,
-      UNIQUE KEY uk_vision_day (habit_id, target_date)
+      INDEX idx_visions_habit (habit_id),
+      CONSTRAINT fk_visions_habit FOREIGN KEY (habit_id) REFERENCES habits(id) ON DELETE CASCADE
     )
   `)
   await db.query(`
@@ -170,6 +208,7 @@ export const initSchema = async () => {
       id CHAR(36) PRIMARY KEY,
       user_id CHAR(36) NOT NULL,
       habit_id CHAR(36) NOT NULL,
+      vision_id CHAR(36) NOT NULL,
       target_date DATE NOT NULL,
       storage_key VARCHAR(255) NOT NULL,
       url VARCHAR(512) NOT NULL,
@@ -177,16 +216,85 @@ export const initSchema = async () => {
       mime_type VARCHAR(120) NOT NULL,
       file_size INT UNSIGNED NOT NULL,
       created_at DATETIME NOT NULL,
-      INDEX idx_vision_images_lookup (user_id, habit_id, target_date),
+      INDEX idx_vision_images_lookup (user_id, habit_id, target_date, vision_id),
       CONSTRAINT fk_vision_images_habit FOREIGN KEY (habit_id) REFERENCES habits(id) ON DELETE CASCADE
     )
   `)
 
   await addColumnIfMissing('habits', 'user_id CHAR(36) NULL AFTER id')
   await addColumnIfMissing('habits', 'sort_order INT NOT NULL DEFAULT 0 AFTER color')
+  await addColumnIfMissing('habits', 'archived_at DATETIME NULL AFTER sort_order')
   await addColumnIfMissing('users', 'profile_image_url VARCHAR(512) NULL AFTER password_hash')
   await addColumnIfMissing('users', 'profile_image_storage_key VARCHAR(255) NULL AFTER profile_image_url')
   await addColumnIfMissing('habit_entries', 'user_id CHAR(36) NULL AFTER id')
+  await addColumnIfMissing('habit_entries', 'custom_color VARCHAR(20) NULL AFTER note')
+  await addColumnIfMissing('visions', 'custom_color VARCHAR(20) NULL AFTER description')
+  await addColumnIfMissing('habit_entry_images', 'entry_id CHAR(36) NULL AFTER habit_id')
+  await addColumnIfMissing('vision_images', 'vision_id CHAR(36) NULL AFTER habit_id')
+  await addIndexIfMissing('habit_entries', 'idx_entries_habit', 'habit_id')
+  await addIndexIfMissing('visions', 'idx_visions_habit', 'habit_id')
+  await addIndexIfMissing('habit_entry_images', 'idx_entry_images_entry_id', 'entry_id')
+  await addIndexIfMissing('vision_images', 'idx_vision_images_vision_id', 'vision_id')
+  await db.query(
+    `INSERT INTO habit_entries (id, user_id, habit_id, entry_date, completed, note, custom_color, updated_at)
+     SELECT UUID(), i.user_id, i.habit_id, i.entry_date, 0, 'Migrated image attachment', NULL, NOW()
+     FROM (
+       SELECT DISTINCT user_id, habit_id, entry_date
+       FROM habit_entry_images
+       WHERE entry_id IS NULL
+     ) i
+     WHERE NOT EXISTS (
+       SELECT 1
+       FROM habit_entries e
+       WHERE e.user_id = i.user_id
+         AND e.habit_id = i.habit_id
+         AND e.entry_date = i.entry_date
+     )`,
+  )
+  await db.query(
+    `UPDATE habit_entry_images i
+     SET i.entry_id = (
+       SELECT e.id
+       FROM habit_entries e
+       WHERE e.user_id = i.user_id
+         AND e.habit_id = i.habit_id
+         AND e.entry_date = i.entry_date
+       ORDER BY e.updated_at DESC, e.id DESC
+       LIMIT 1
+     )
+     WHERE i.entry_id IS NULL`,
+  )
+  await db.query(
+    `INSERT INTO visions (id, user_id, habit_id, target_date, title, description, custom_color, created_at, updated_at)
+     SELECT UUID(), i.user_id, i.habit_id, i.target_date, 'Migrated vision', 'Auto-created during image migration', NULL, NOW(), NOW()
+     FROM (
+       SELECT DISTINCT user_id, habit_id, target_date
+       FROM vision_images
+       WHERE vision_id IS NULL
+     ) i
+     WHERE NOT EXISTS (
+       SELECT 1
+       FROM visions v
+       WHERE v.user_id = i.user_id
+         AND v.habit_id = i.habit_id
+         AND v.target_date = i.target_date
+     )`,
+  )
+  await db.query(
+    `UPDATE vision_images i
+     SET i.vision_id = (
+       SELECT v.id
+       FROM visions v
+       WHERE v.user_id = i.user_id
+         AND v.habit_id = i.habit_id
+         AND v.target_date = i.target_date
+       ORDER BY v.updated_at DESC, v.id DESC
+       LIMIT 1
+     )
+     WHERE i.vision_id IS NULL`,
+  )
+  await dropIndexIfExists('habit_entries', 'uk_habit_day')
+  await dropIndexIfExists('visions', 'uk_vision_day')
 }
 
 export const createUser = async ({ email, passwordHash }) => {
@@ -286,19 +394,39 @@ export const deleteUserByEmail = async (email) => {
   await db.query('DELETE FROM users WHERE email = ?', [email])
 }
 
-export const habitBelongsToUser = async (userId, habitId) => {
+export const habitBelongsToUser = async (userId, habitId, { includeArchived = false } = {}) => {
   const db = await getDb()
-  const [rows] = await db.query('SELECT id FROM habits WHERE id = ? AND user_id = ? LIMIT 1', [
+  const [rows] = await db.query(
+    `SELECT id FROM habits
+     WHERE id = ? AND user_id = ? ${includeArchived ? '' : 'AND archived_at IS NULL'}
+     LIMIT 1`,
+    [
     habitId,
     userId,
-  ])
+    ],
+  )
   return Boolean(rows[0])
 }
 
 export const listHabits = async (userId) => {
   const db = await getDb()
   const [rows] = await db.query(
-    'SELECT id, user_id, name, color, sort_order, created_at FROM habits WHERE user_id = ? ORDER BY sort_order ASC, created_at DESC',
+    `SELECT id, user_id, name, color, sort_order, archived_at, created_at
+     FROM habits
+     WHERE user_id = ? AND archived_at IS NULL
+     ORDER BY sort_order ASC, created_at DESC`,
+    [userId],
+  )
+  return rows.map(toHabit)
+}
+
+export const listArchivedHabits = async (userId) => {
+  const db = await getDb()
+  const [rows] = await db.query(
+    `SELECT id, user_id, name, color, sort_order, archived_at, created_at
+     FROM habits
+     WHERE user_id = ? AND archived_at IS NOT NULL
+     ORDER BY archived_at DESC, created_at DESC`,
     [userId],
   )
   return rows.map(toHabit)
@@ -306,9 +434,10 @@ export const listHabits = async (userId) => {
 
 export const createHabit = async ({ userId, name, color }) => {
   const db = await getDb()
-  const [[orderRow]] = await db.query('SELECT COALESCE(MAX(sort_order), -1) AS max_sort_order FROM habits WHERE user_id = ?', [
-    userId,
-  ])
+  const [[orderRow]] = await db.query(
+    'SELECT COALESCE(MAX(sort_order), -1) AS max_sort_order FROM habits WHERE user_id = ? AND archived_at IS NULL',
+    [userId],
+  )
   const habit = {
     id: randomUUID(),
     userId,
@@ -331,7 +460,10 @@ export const createHabit = async ({ userId, name, color }) => {
 export const reorderHabits = async ({ userId, habitIds }) => {
   const db = await getDb()
   const normalizedIds = [...new Set(habitIds.map((id) => String(id)))]
-  const [rows] = await db.query('SELECT id FROM habits WHERE user_id = ? ORDER BY sort_order ASC, created_at DESC', [userId])
+  const [rows] = await db.query(
+    'SELECT id FROM habits WHERE user_id = ? AND archived_at IS NULL ORDER BY sort_order ASC, created_at DESC',
+    [userId],
+  )
   const currentIds = rows.map((row) => row.id)
   if (normalizedIds.length !== currentIds.length) return null
   if (currentIds.some((id) => !normalizedIds.includes(id))) return null
@@ -340,7 +472,10 @@ export const reorderHabits = async ({ userId, habitIds }) => {
   try {
     await connection.beginTransaction()
     for (let index = 0; index < normalizedIds.length; index += 1) {
-      await connection.query('UPDATE habits SET sort_order = ? WHERE user_id = ? AND id = ?', [index, userId, normalizedIds[index]])
+      await connection.query(
+        'UPDATE habits SET sort_order = ? WHERE user_id = ? AND id = ? AND archived_at IS NULL',
+        [index, userId, normalizedIds[index]],
+      )
     }
     await connection.commit()
   } catch (error) {
@@ -351,7 +486,10 @@ export const reorderHabits = async ({ userId, habitIds }) => {
   }
 
   const [updatedRows] = await db.query(
-    'SELECT id, user_id, name, color, sort_order, created_at FROM habits WHERE user_id = ? ORDER BY sort_order ASC, created_at DESC',
+    `SELECT id, user_id, name, color, sort_order, archived_at, created_at
+     FROM habits
+     WHERE user_id = ? AND archived_at IS NULL
+     ORDER BY sort_order ASC, created_at DESC`,
     [userId],
   )
   return updatedRows.map(toHabit)
@@ -370,10 +508,48 @@ export const updateHabit = async ({ userId, habitId, name, color }) => {
   if (result.affectedRows === 0) return null
 
   const [rows] = await db.query(
-    'SELECT id, user_id, name, color, sort_order, created_at FROM habits WHERE id = ? AND user_id = ? LIMIT 1',
+    'SELECT id, user_id, name, color, sort_order, archived_at, created_at FROM habits WHERE id = ? AND user_id = ? LIMIT 1',
     [habitId, userId],
   )
   return rows[0] ? toHabit(rows[0]) : null
+}
+
+export const archiveHabit = async ({ userId, habitId }) => {
+  const db = await getDb()
+  const [result] = await db.query(
+    'UPDATE habits SET archived_at = ? WHERE id = ? AND user_id = ? AND archived_at IS NULL',
+    [toMySqlDateTime(new Date()), habitId, userId],
+  )
+  if (result.affectedRows === 0) return null
+  const [rows] = await db.query(
+    'SELECT id, user_id, name, color, sort_order, archived_at, created_at FROM habits WHERE id = ? AND user_id = ? LIMIT 1',
+    [habitId, userId],
+  )
+  return rows[0] ? toHabit(rows[0]) : null
+}
+
+export const restoreHabit = async ({ userId, habitId }) => {
+  const db = await getDb()
+  const [rows] = await db.query(
+    'SELECT id FROM habits WHERE id = ? AND user_id = ? AND archived_at IS NOT NULL LIMIT 1',
+    [habitId, userId],
+  )
+  if (!rows[0]) return null
+
+  const [[orderRow]] = await db.query(
+    'SELECT COALESCE(MAX(sort_order), -1) AS max_sort_order FROM habits WHERE user_id = ? AND archived_at IS NULL',
+    [userId],
+  )
+  const nextSortOrder = Number(orderRow?.max_sort_order ?? -1) + 1
+  await db.query(
+    'UPDATE habits SET archived_at = NULL, sort_order = ? WHERE id = ? AND user_id = ?',
+    [nextSortOrder, habitId, userId],
+  )
+  const [updatedRows] = await db.query(
+    'SELECT id, user_id, name, color, sort_order, archived_at, created_at FROM habits WHERE id = ? AND user_id = ? LIMIT 1',
+    [habitId, userId],
+  )
+  return updatedRows[0] ? toHabit(updatedRows[0]) : null
 }
 
 export const deleteHabit = async ({ userId, habitId }) => {
@@ -395,6 +571,7 @@ export const listEntriesForYear = async ({ userId, habitId, year }) => {
        e.entry_date,
        e.completed,
        e.note,
+     e.custom_color,
        e.updated_at,
        (
          SELECT COUNT(*)
@@ -402,6 +579,7 @@ export const listEntriesForYear = async ({ userId, habitId, year }) => {
          WHERE i.user_id = e.user_id
            AND i.habit_id = e.habit_id
            AND i.entry_date = e.entry_date
+           AND i.entry_id = e.id
        ) AS image_count
      FROM habit_entries
      AS e
@@ -412,31 +590,9 @@ export const listEntriesForYear = async ({ userId, habitId, year }) => {
   return rows.map(toEntry)
 }
 
-export const upsertEntry = async ({ userId, habitId, date, completed, note }) => {
+export const listEntriesForDate = async ({ userId, habitId, date }) => {
   if (!(await habitBelongsToUser(userId, habitId))) return null
   const db = await getDb()
-  const trimmed = (note ?? '').trim()
-  const shouldPersist = Boolean(completed || trimmed.length > 0)
-
-  if (!shouldPersist) {
-    await db.query('DELETE FROM habit_entries WHERE user_id = ? AND habit_id = ? AND entry_date = ?', [
-      userId,
-      habitId,
-      date,
-    ])
-    return null
-  }
-
-  await db.query(
-    `INSERT INTO habit_entries (id, user_id, habit_id, entry_date, completed, note, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE
-       completed = VALUES(completed),
-       note = VALUES(note),
-       updated_at = VALUES(updated_at)`,
-    [randomUUID(), userId, habitId, date, completed ? 1 : 0, trimmed, toMySqlDateTime(new Date())],
-  )
-
   const [rows] = await db.query(
     `SELECT
        e.id,
@@ -445,6 +601,7 @@ export const upsertEntry = async ({ userId, habitId, date, completed, note }) =>
        e.entry_date,
        e.completed,
        e.note,
+       e.custom_color,
        e.updated_at,
        (
          SELECT COUNT(*)
@@ -452,25 +609,94 @@ export const upsertEntry = async ({ userId, habitId, date, completed, note }) =>
          WHERE i.user_id = e.user_id
            AND i.habit_id = e.habit_id
            AND i.entry_date = e.entry_date
+           AND i.entry_id = e.id
        ) AS image_count
      FROM habit_entries AS e
-     WHERE e.user_id = ? AND e.habit_id = ? AND e.entry_date = ?`,
+     WHERE e.user_id = ? AND e.habit_id = ? AND e.entry_date = ?
+     ORDER BY e.updated_at DESC`,
     [userId, habitId, date],
+  )
+  return rows.map(toEntry)
+}
+
+export const createEntry = async ({ userId, habitId, date, completed, note, customColor }) => {
+  if (!(await habitBelongsToUser(userId, habitId))) return null
+  const db = await getDb()
+  const trimmed = String(note ?? '').trim()
+  const shouldPersist = Boolean(completed || trimmed.length > 0)
+  if (!shouldPersist) return null
+
+  const entry = {
+    id: randomUUID(),
+    userId,
+    habitId,
+    date,
+    completed: Boolean(completed),
+    note: trimmed,
+    customColor: normalizeColor(customColor),
+    updatedAt: toMySqlDateTime(new Date()),
+  }
+  await db.query(
+    `INSERT INTO habit_entries (id, user_id, habit_id, entry_date, completed, note, custom_color, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [entry.id, entry.userId, entry.habitId, entry.date, entry.completed ? 1 : 0, entry.note, entry.customColor, entry.updatedAt],
+  )
+  const [rows] = await db.query(
+    `SELECT e.id, e.user_id, e.habit_id, e.entry_date, e.completed, e.note, e.custom_color, e.updated_at, 0 AS image_count
+     FROM habit_entries AS e
+     WHERE e.id = ? AND e.user_id = ? LIMIT 1`,
+    [entry.id, userId],
   )
   return rows[0] ? toEntry(rows[0]) : null
 }
 
-export const deleteEntry = async ({ userId, habitId, date }) => {
+export const updateEntry = async ({ userId, habitId, date, entryId, completed, note, customColor }) => {
+  if (!(await habitBelongsToUser(userId, habitId))) return null
+  const db = await getDb()
+  const trimmed = String(note ?? '').trim()
+  const shouldPersist = Boolean(completed || trimmed.length > 0)
+  if (!shouldPersist) return null
+
+  const [result] = await db.query(
+    `UPDATE habit_entries
+     SET completed = ?, note = ?, custom_color = ?, updated_at = ?
+     WHERE id = ? AND user_id = ? AND habit_id = ? AND entry_date = ?`,
+    [completed ? 1 : 0, trimmed, normalizeColor(customColor), toMySqlDateTime(new Date()), entryId, userId, habitId, date],
+  )
+  if (result.affectedRows === 0) return null
+  const [rows] = await db.query(
+    `SELECT
+       e.id,
+       e.user_id,
+       e.habit_id,
+       e.entry_date,
+       e.completed,
+       e.note,
+       e.custom_color,
+       e.updated_at,
+       (
+         SELECT COUNT(*)
+         FROM habit_entry_images i
+         WHERE i.user_id = e.user_id
+           AND i.habit_id = e.habit_id
+           AND i.entry_date = e.entry_date
+           AND i.entry_id = e.id
+       ) AS image_count
+     FROM habit_entries AS e
+     WHERE e.id = ? AND e.user_id = ? LIMIT 1`,
+    [entryId, userId],
+  )
+  return rows[0] ? toEntry(rows[0]) : null
+}
+
+export const deleteEntryById = async ({ userId, habitId, date, entryId }) => {
   if (!(await habitBelongsToUser(userId, habitId))) return false
   const db = await getDb()
-  await db.query('DELETE FROM habit_entry_images WHERE user_id = ? AND habit_id = ? AND entry_date = ?', [
-    userId,
-    habitId,
-    date,
-  ])
+  await db.query('DELETE FROM habit_entry_images WHERE user_id = ? AND habit_id = ? AND entry_date = ? AND entry_id = ?', [userId, habitId, date, entryId])
   const [result] = await db.query(
-    'DELETE FROM habit_entries WHERE user_id = ? AND habit_id = ? AND entry_date = ?',
-    [userId, habitId, date],
+    `DELETE FROM habit_entries
+     WHERE id = ? AND user_id = ? AND habit_id = ? AND entry_date = ?`,
+    [entryId, userId, habitId, date],
   )
   return result.affectedRows > 0
 }
@@ -488,6 +714,7 @@ export const listVisionsForYear = async ({ userId, habitId, year }) => {
        v.target_date,
        v.title,
        v.description,
+      v.custom_color,
        v.created_at,
        v.updated_at,
        (
@@ -496,6 +723,7 @@ export const listVisionsForYear = async ({ userId, habitId, year }) => {
          WHERE i.user_id = v.user_id
            AND i.habit_id = v.habit_id
            AND i.target_date = v.target_date
+           AND i.vision_id = v.id
        ) AS image_count
      FROM visions AS v
      WHERE v.user_id = ? AND v.habit_id = ? AND v.target_date BETWEEN ? AND ?
@@ -505,23 +733,9 @@ export const listVisionsForYear = async ({ userId, habitId, year }) => {
   return rows.map(toVision)
 }
 
-export const upsertVision = async ({ userId, habitId, date, title, description }) => {
+export const listVisionsForDate = async ({ userId, habitId, date }) => {
   if (!(await habitBelongsToUser(userId, habitId))) return null
   const db = await getDb()
-  const trimmedTitle = String(title ?? '').trim()
-  if (!trimmedTitle) return null
-
-  const now = toMySqlDateTime(new Date())
-  await db.query(
-    `INSERT INTO visions (id, user_id, habit_id, target_date, title, description, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE
-       title = VALUES(title),
-       description = VALUES(description),
-       updated_at = VALUES(updated_at)`,
-    [randomUUID(), userId, habitId, date, trimmedTitle, String(description ?? '').trim(), now, now],
-  )
-
   const [rows] = await db.query(
     `SELECT
        v.id,
@@ -530,6 +744,7 @@ export const upsertVision = async ({ userId, habitId, date, title, description }
        v.target_date,
        v.title,
        v.description,
+       v.custom_color,
        v.created_at,
        v.updated_at,
        (
@@ -538,63 +753,136 @@ export const upsertVision = async ({ userId, habitId, date, title, description }
          WHERE i.user_id = v.user_id
            AND i.habit_id = v.habit_id
            AND i.target_date = v.target_date
+           AND i.vision_id = v.id
        ) AS image_count
      FROM visions AS v
-     WHERE v.user_id = ? AND v.habit_id = ? AND v.target_date = ?`,
+     WHERE v.user_id = ? AND v.habit_id = ? AND v.target_date = ?
+     ORDER BY v.updated_at DESC`,
     [userId, habitId, date],
+  )
+  return rows.map(toVision)
+}
+
+export const createVision = async ({ userId, habitId, date, title, description, customColor }) => {
+  if (!(await habitBelongsToUser(userId, habitId))) return null
+  const db = await getDb()
+  const trimmedTitle = String(title ?? '').trim()
+  if (!trimmedTitle) return null
+  const now = toMySqlDateTime(new Date())
+  const vision = {
+    id: randomUUID(),
+    userId,
+    habitId,
+    date,
+    title: trimmedTitle,
+    description: String(description ?? '').trim(),
+    customColor: normalizeColor(customColor),
+    createdAt: now,
+    updatedAt: now,
+  }
+  await db.query(
+    `INSERT INTO visions (id, user_id, habit_id, target_date, title, description, custom_color, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      vision.id,
+      vision.userId,
+      vision.habitId,
+      vision.date,
+      vision.title,
+      vision.description,
+      vision.customColor,
+      vision.createdAt,
+      vision.updatedAt,
+    ],
+  )
+  const [rows] = await db.query(
+    `SELECT
+       v.id, v.user_id, v.habit_id, v.target_date, v.title, v.description, v.custom_color, v.created_at, v.updated_at, 0 AS image_count
+     FROM visions AS v
+     WHERE v.id = ? AND v.user_id = ? LIMIT 1`,
+    [vision.id, userId],
   )
   return rows[0] ? toVision(rows[0]) : null
 }
 
-export const deleteVision = async ({ userId, habitId, date }) => {
+export const updateVision = async ({ userId, habitId, date, visionId, title, description, customColor }) => {
+  if (!(await habitBelongsToUser(userId, habitId))) return null
+  const db = await getDb()
+  const trimmedTitle = String(title ?? '').trim()
+  if (!trimmedTitle) return null
+  const [result] = await db.query(
+    `UPDATE visions
+     SET title = ?, description = ?, custom_color = ?, updated_at = ?
+     WHERE id = ? AND user_id = ? AND habit_id = ? AND target_date = ?`,
+    [trimmedTitle, String(description ?? '').trim(), normalizeColor(customColor), toMySqlDateTime(new Date()), visionId, userId, habitId, date],
+  )
+  if (result.affectedRows === 0) return null
+  const [rows] = await db.query(
+    `SELECT
+       v.id,
+       v.user_id,
+       v.habit_id,
+       v.target_date,
+       v.title,
+       v.description,
+       v.custom_color,
+       v.created_at,
+       v.updated_at,
+       (
+         SELECT COUNT(*)
+         FROM vision_images i
+         WHERE i.user_id = v.user_id
+           AND i.habit_id = v.habit_id
+           AND i.target_date = v.target_date
+           AND i.vision_id = v.id
+       ) AS image_count
+     FROM visions AS v
+     WHERE v.id = ? AND v.user_id = ? LIMIT 1`,
+    [visionId, userId],
+  )
+  return rows[0] ? toVision(rows[0]) : null
+}
+
+export const deleteVisionById = async ({ userId, habitId, date, visionId }) => {
   if (!(await habitBelongsToUser(userId, habitId))) return false
   const db = await getDb()
-  await db.query('DELETE FROM vision_images WHERE user_id = ? AND habit_id = ? AND target_date = ?', [
-    userId,
-    habitId,
-    date,
-  ])
+  await db.query('DELETE FROM vision_images WHERE user_id = ? AND habit_id = ? AND target_date = ? AND vision_id = ?', [userId, habitId, date, visionId])
   const [result] = await db.query(
-    'DELETE FROM visions WHERE user_id = ? AND habit_id = ? AND target_date = ?',
-    [userId, habitId, date],
+    `DELETE FROM visions
+     WHERE id = ? AND user_id = ? AND habit_id = ? AND target_date = ?`,
+    [visionId, userId, habitId, date],
   )
   return result.affectedRows > 0
 }
 
-const visionExistsForDate = async ({ userId, habitId, date }) => {
+const findEntryForImage = async ({ userId, habitId, date, entryId }) => {
   const db = await getDb()
   const [rows] = await db.query(
-    'SELECT id FROM visions WHERE user_id = ? AND habit_id = ? AND target_date = ? LIMIT 1',
-    [userId, habitId, date],
+    'SELECT id FROM habit_entries WHERE id = ? AND user_id = ? AND habit_id = ? AND entry_date = ? LIMIT 1',
+    [entryId, userId, habitId, date],
   )
-  return Boolean(rows[0])
+  return rows[0] ? rows[0].id : null
 }
 
-const ensureEntryExistsForImage = async ({ userId, habitId, date }) => {
+const findVisionForImage = async ({ userId, habitId, date, visionId }) => {
   const db = await getDb()
   const [rows] = await db.query(
-    'SELECT id FROM habit_entries WHERE user_id = ? AND habit_id = ? AND entry_date = ? LIMIT 1',
-    [userId, habitId, date],
+    'SELECT id FROM visions WHERE id = ? AND user_id = ? AND habit_id = ? AND target_date = ? LIMIT 1',
+    [visionId, userId, habitId, date],
   )
-  if (rows[0]) return
-
-  await db.query(
-    `INSERT INTO habit_entries (id, user_id, habit_id, entry_date, completed, note, updated_at)
-     VALUES (?, ?, ?, ?, 1, '', ?)
-     ON DUPLICATE KEY UPDATE updated_at = VALUES(updated_at)`,
-    [randomUUID(), userId, habitId, date, toMySqlDateTime(new Date())],
-  )
+  return rows[0] ? rows[0].id : null
 }
 
-export const listEntryImages = async ({ userId, habitId, date }) => {
+export const listEntryImages = async ({ userId, habitId, date, entryId }) => {
   if (!(await habitBelongsToUser(userId, habitId))) return null
+  if (!(await findEntryForImage({ userId, habitId, date, entryId }))) return null
   const db = await getDb()
   const [rows] = await db.query(
-    `SELECT id, user_id, habit_id, entry_date, storage_key, url, original_name, mime_type, file_size, created_at
+    `SELECT id, user_id, habit_id, entry_id, entry_date, storage_key, url, original_name, mime_type, file_size, created_at
      FROM habit_entry_images
-     WHERE user_id = ? AND habit_id = ? AND entry_date = ?
+     WHERE user_id = ? AND habit_id = ? AND entry_date = ? AND entry_id = ?
      ORDER BY created_at DESC`,
-    [userId, habitId, date],
+    [userId, habitId, date, entryId],
   )
   return rows.map(toEntryImage)
 }
@@ -603,6 +891,7 @@ export const addEntryImage = async ({
   userId,
   habitId,
   date,
+  entryId,
   storageKey,
   url,
   originalName,
@@ -610,13 +899,14 @@ export const addEntryImage = async ({
   fileSize,
 }) => {
   if (!(await habitBelongsToUser(userId, habitId))) return null
-  await ensureEntryExistsForImage({ userId, habitId, date })
+  if (!(await findEntryForImage({ userId, habitId, date, entryId }))) return null
 
   const db = await getDb()
   const image = {
     id: randomUUID(),
     userId,
     habitId,
+    entryId,
     date,
     storageKey,
     url,
@@ -628,12 +918,13 @@ export const addEntryImage = async ({
 
   await db.query(
     `INSERT INTO habit_entry_images
-     (id, user_id, habit_id, entry_date, storage_key, url, original_name, mime_type, file_size, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     (id, user_id, habit_id, entry_id, entry_date, storage_key, url, original_name, mime_type, file_size, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       image.id,
       image.userId,
       image.habitId,
+      image.entryId,
       image.date,
       image.storageKey,
       image.url,
@@ -646,15 +937,16 @@ export const addEntryImage = async ({
   return image
 }
 
-export const deleteEntryImage = async ({ userId, habitId, date, imageId }) => {
+export const deleteEntryImage = async ({ userId, habitId, date, entryId, imageId }) => {
   if (!(await habitBelongsToUser(userId, habitId))) return null
+  if (!(await findEntryForImage({ userId, habitId, date, entryId }))) return null
   const db = await getDb()
   const [rows] = await db.query(
-    `SELECT id, user_id, habit_id, entry_date, storage_key, url, original_name, mime_type, file_size, created_at
+    `SELECT id, user_id, habit_id, entry_id, entry_date, storage_key, url, original_name, mime_type, file_size, created_at
      FROM habit_entry_images
-     WHERE id = ? AND user_id = ? AND habit_id = ? AND entry_date = ?
+     WHERE id = ? AND user_id = ? AND habit_id = ? AND entry_date = ? AND entry_id = ?
      LIMIT 1`,
-    [imageId, userId, habitId, date],
+    [imageId, userId, habitId, date, entryId],
   )
   const image = rows[0] ? toEntryImage(rows[0]) : null
   if (!image) return null
@@ -663,15 +955,16 @@ export const deleteEntryImage = async ({ userId, habitId, date, imageId }) => {
   return image
 }
 
-export const listVisionImages = async ({ userId, habitId, date }) => {
+export const listVisionImages = async ({ userId, habitId, date, visionId }) => {
   if (!(await habitBelongsToUser(userId, habitId))) return null
+  if (!(await findVisionForImage({ userId, habitId, date, visionId }))) return null
   const db = await getDb()
   const [rows] = await db.query(
-    `SELECT id, user_id, habit_id, target_date, storage_key, url, original_name, mime_type, file_size, created_at
+    `SELECT id, user_id, habit_id, vision_id, target_date, storage_key, url, original_name, mime_type, file_size, created_at
      FROM vision_images
-     WHERE user_id = ? AND habit_id = ? AND target_date = ?
+     WHERE user_id = ? AND habit_id = ? AND target_date = ? AND vision_id = ?
      ORDER BY created_at DESC`,
-    [userId, habitId, date],
+    [userId, habitId, date, visionId],
   )
   return rows.map(toVisionImage)
 }
@@ -680,6 +973,7 @@ export const addVisionImage = async ({
   userId,
   habitId,
   date,
+  visionId,
   storageKey,
   url,
   originalName,
@@ -687,13 +981,14 @@ export const addVisionImage = async ({
   fileSize,
 }) => {
   if (!(await habitBelongsToUser(userId, habitId))) return null
-  if (!(await visionExistsForDate({ userId, habitId, date }))) return null
+  if (!(await findVisionForImage({ userId, habitId, date, visionId }))) return null
 
   const db = await getDb()
   const image = {
     id: randomUUID(),
     userId,
     habitId,
+    visionId,
     date,
     storageKey,
     url,
@@ -705,12 +1000,13 @@ export const addVisionImage = async ({
 
   await db.query(
     `INSERT INTO vision_images
-     (id, user_id, habit_id, target_date, storage_key, url, original_name, mime_type, file_size, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     (id, user_id, habit_id, vision_id, target_date, storage_key, url, original_name, mime_type, file_size, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       image.id,
       image.userId,
       image.habitId,
+      image.visionId,
       image.date,
       image.storageKey,
       image.url,
@@ -723,15 +1019,16 @@ export const addVisionImage = async ({
   return image
 }
 
-export const deleteVisionImage = async ({ userId, habitId, date, imageId }) => {
+export const deleteVisionImage = async ({ userId, habitId, date, visionId, imageId }) => {
   if (!(await habitBelongsToUser(userId, habitId))) return null
+  if (!(await findVisionForImage({ userId, habitId, date, visionId }))) return null
   const db = await getDb()
   const [rows] = await db.query(
-    `SELECT id, user_id, habit_id, target_date, storage_key, url, original_name, mime_type, file_size, created_at
+    `SELECT id, user_id, habit_id, vision_id, target_date, storage_key, url, original_name, mime_type, file_size, created_at
      FROM vision_images
-     WHERE id = ? AND user_id = ? AND habit_id = ? AND target_date = ?
+     WHERE id = ? AND user_id = ? AND habit_id = ? AND target_date = ? AND vision_id = ?
      LIMIT 1`,
-    [imageId, userId, habitId, date],
+    [imageId, userId, habitId, date, visionId],
   )
   const image = rows[0] ? toVisionImage(rows[0]) : null
   if (!image) return null

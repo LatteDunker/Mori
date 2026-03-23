@@ -10,7 +10,9 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "verify:sql": "node scripts/verify-sql-ops.mjs"
+    "verify:sql": "node scripts/verify-sql-ops.mjs",
+    "docker:dev": "COMPOSE_ENV_FILE=.env.development docker compose --env-file .env.development up --build",
+    "docker:staging": "COMPOSE_ENV_FILE=.env.staging docker compose -f docker-compose.yml -f docker-compose.staging.yml --env-file .env.staging up --build -d"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -23,17 +25,20 @@
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
+    "minio": "^8.0.7",
     "multer": "^2.0.2",
     "mysql2": "^3.18.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "react-easy-crop": "^5.5.6"
+    "react-easy-crop": "^5.5.6",
+    "three": "^0.183.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
+    "@types/three": "^0.183.1",
     "@vitejs/plugin-react": "^5.1.1",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",

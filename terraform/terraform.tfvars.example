@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars (gitignored) and adjust.
+
+aws_region     = "us-east-1"
+instance_type  = "t3.small"
+key_name       = "my-keypair-name" # existing EC2 key pair in this region
+
+# Lock SSH to your IP for staging, e.g. "203.0.113.10/32"
+ssh_cidr = "0.0.0.0/0"
+
+install_docker = true
+project_name   = "progress-tracker-staging"

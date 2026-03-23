@@ -1,0 +1,33 @@
+# Staging overlay for EC2 (or any long-lived host). Use with the base compose file and .env.staging.
+#
+#   COMPOSE_ENV_FILE=.env.staging docker compose -f docker-compose.yml -f docker-compose.staging.yml --env-file .env.staging up -d --build
+#
+# Or: npm run docker:staging
+#
+# COMPOSE_ENV_FILE must match the file passed to --env-file so service env injection and
+# Compose variable interpolation (${DB_PASSWORD}, etc.) use the same values.
+
+services:
+  mysql:
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  minio:
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  api:
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

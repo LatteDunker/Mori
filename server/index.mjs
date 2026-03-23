@@ -2,56 +2,53 @@ import express from 'express'
 import cors from 'cors'
 import bcrypt from 'bcryptjs'
 import multer from 'multer'
-import fs from 'node:fs/promises'
-import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { config } from './config.mjs'
 import { closeDb } from './db.mjs'
 import { createAccessToken, requireAuth } from './auth.mjs'
+import { deleteStoredFile, getStoredFileStream, initStorage, saveUploadedFile } from './storage.mjs'
 import {
   addVisionImage,
+  archiveHabit,
+  createEntry,
   createHabit,
   createUser,
+  createVision,
   clearUserProfileImage,
-  deleteEntry,
+  deleteEntryById,
   deleteEntryImage,
   deleteHabit,
-  deleteVision,
+  deleteVisionById,
   deleteVisionImage,
   findUserByEmail,
   findUserById,
   habitBelongsToUser,
   initSchema,
   listEntriesForYear,
+  listEntriesForDate,
   listEntryImages,
+  listArchivedHabits,
   listHabits,
   listVisionImages,
   listVisionsForYear,
+  listVisionsForDate,
   reorderHabits,
   revokeToken,
+  restoreHabit,
   setUserProfileImage,
   addEntryImage,
   updateHabit,
-  upsertVision,
-  upsertEntry,
+  updateEntry,
+  updateVision,
 } from './repository.mjs'
 
 const MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
-const uploadsDir = path.resolve(__dirname, '../uploads')
 
 const isValidDateString = (dateValue) => /^\d{4}-\d{2}-\d{2}$/.test(dateValue)
 
 const buildUploadMiddleware = () =>
   multer({
-    storage: multer.diskStorage({
-      destination: (_req, _file, callback) => callback(null, uploadsDir),
-      filename: (_req, file, callback) => {
-        const ext = path.extname(file.originalname).slice(0, 10)
-        callback(null, `${Date.now()}-${Math.random().toString(16).slice(2)}${ext}`)
-      },
-    }),
+    storage: multer.memoryStorage(),
     limits: { fileSize: MAX_IMAGE_SIZE_BYTES },
     fileFilter: (_req, file, callback) => {
       if (!file.mimetype.startsWith('image/')) {
@@ -74,7 +71,15 @@ export const createApp = () => {
   const upload = buildUploadMiddleware()
   app.use(cors())
   app.use(express.json())
-  app.use('/uploads', express.static(uploadsDir))
+  app.get('/uploads/:storageKey', async (req, res) => {
+    const storageKey = String(req.params.storageKey ?? '')
+    if (!storageKey) return res.status(404).send('Not found')
+    const stored = await getStoredFileStream(storageKey)
+    if (!stored) return res.status(404).send('Not found')
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+    if (stored.mimeType) res.setHeader('Content-Type', stored.mimeType)
+    stored.stream.pipe(res)
+  })
 
   app.get('/api/health', async (_req, res) => {
     res.json({ ok: true })
@@ -134,14 +139,15 @@ export const createApp = () => {
 
   app.post('/api/auth/profile-image', requireAuth, upload.single('image'), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: 'Image file is required' })
+    const uploadResult = await saveUploadedFile({ file: req.file, prefix: 'profile' })
     const result = await setUserProfileImage({
       userId: req.auth.userId,
-      storageKey: req.file.filename,
-      url: `/uploads/${req.file.filename}`,
+      storageKey: uploadResult.storageKey,
+      url: uploadResult.url,
     })
     if (!result) return res.status(404).json({ message: 'User not found' })
-    if (result.previousStorageKey && result.previousStorageKey !== req.file.filename) {
-      await fs.unlink(path.join(uploadsDir, result.previousStorageKey)).catch(() => {})
+    if (result.previousStorageKey && result.previousStorageKey !== uploadResult.storageKey) {
+      await deleteStoredFile(result.previousStorageKey)
     }
     console.log('[POST /api/auth/profile-image] updated', { userId: req.auth.userId, url: result.user.profileImageUrl })
     return res.json({ user: sanitizeUser(result.user) })
@@ -151,7 +157,7 @@ export const createApp = () => {
     const result = await clearUserProfileImage(req.auth.userId)
     if (!result) return res.status(404).json({ message: 'User not found' })
     if (result.previousStorageKey) {
-      await fs.unlink(path.join(uploadsDir, result.previousStorageKey)).catch(() => {})
+      await deleteStoredFile(result.previousStorageKey)
     }
     console.log('[DELETE /api/auth/profile-image] cleared', { userId: req.auth.userId })
     return res.json({ user: sanitizeUser(result.user) })
@@ -159,6 +165,11 @@ export const createApp = () => {
 
   app.get('/api/habits', requireAuth, async (req, res) => {
     const habits = await listHabits(req.auth.userId)
+    res.json({ habits })
+  })
+
+  app.get('/api/habits/archive', requireAuth, async (req, res) => {
+    const habits = await listArchivedHabits(req.auth.userId)
     res.json({ habits })
   })
 
@@ -193,6 +204,20 @@ export const createApp = () => {
     return res.json({ habit })
   })
 
+  app.post('/api/habits/:habitId/archive', requireAuth, async (req, res) => {
+    const habit = await archiveHabit({ userId: req.auth.userId, habitId: req.params.habitId })
+    if (!habit) return res.status(404).json({ message: 'Habit not found' })
+    console.log('[POST /api/habits/:habitId/archive] archived', { habitId: habit.id })
+    return res.json({ habit })
+  })
+
+  app.post('/api/habits/:habitId/restore', requireAuth, async (req, res) => {
+    const habit = await restoreHabit({ userId: req.auth.userId, habitId: req.params.habitId })
+    if (!habit) return res.status(404).json({ message: 'Archived habit not found' })
+    console.log('[POST /api/habits/:habitId/restore] restored', { habitId: habit.id })
+    return res.json({ habit })
+  })
+
   app.delete('/api/habits/:habitId', requireAuth, async (req, res) => {
     const removed = await deleteHabit({ userId: req.auth.userId, habitId: req.params.habitId })
     if (!removed) return res.status(404).json({ message: 'Habit not found' })
@@ -209,33 +234,79 @@ export const createApp = () => {
     return res.json({ entries })
   })
 
-  app.put('/api/habits/:habitId/entries/:date', requireAuth, async (req, res) => {
+  app.get('/api/habits/:habitId/entries/:date', requireAuth, async (req, res) => {
+    if (!isValidDateString(req.params.date)) {
+      return res.status(400).json({ message: 'Date must use YYYY-MM-DD format' })
+    }
+    const entries = await listEntriesForDate({
+      userId: req.auth.userId,
+      habitId: req.params.habitId,
+      date: req.params.date,
+    })
+    if (entries === null) return res.status(404).json({ message: 'Habit not found' })
+    return res.json({ entries })
+  })
+
+  app.post('/api/habits/:habitId/entries/:date', requireAuth, async (req, res) => {
+    if (!isValidDateString(req.params.date)) {
+      return res.status(400).json({ message: 'Date must use YYYY-MM-DD format' })
+    }
     const hasHabit = await habitBelongsToUser(req.auth.userId, req.params.habitId)
     if (!hasHabit) return res.status(404).json({ message: 'Habit not found' })
 
     const completed = Boolean(req.body?.completed)
     const note = String(req.body?.note ?? '')
-    const entry = await upsertEntry({
+    const customColor = String(req.body?.customColor ?? '').trim() || null
+    const entry = await createEntry({
       userId: req.auth.userId,
       habitId: req.params.habitId,
       date: req.params.date,
       completed,
       note,
+      customColor,
     })
-    return res.json({ entry })
+    if (!entry) return res.status(400).json({ message: 'Entry requires completion or note' })
+    return res.status(201).json({ entry })
   })
 
-  app.delete('/api/habits/:habitId/entries/:date', requireAuth, async (req, res) => {
-    const removed = await deleteEntry({
+  app.patch('/api/habits/:habitId/entries/:date/:entryId', requireAuth, async (req, res) => {
+    if (!isValidDateString(req.params.date)) {
+      return res.status(400).json({ message: 'Date must use YYYY-MM-DD format' })
+    }
+    const hasHabit = await habitBelongsToUser(req.auth.userId, req.params.habitId)
+    if (!hasHabit) return res.status(404).json({ message: 'Habit not found' })
+
+    const completed = Boolean(req.body?.completed)
+    const note = String(req.body?.note ?? '')
+    const customColor = String(req.body?.customColor ?? '').trim() || null
+    const entry = await updateEntry({
       userId: req.auth.userId,
       habitId: req.params.habitId,
       date: req.params.date,
+      entryId: req.params.entryId,
+      completed,
+      note,
+      customColor,
+    })
+    if (!entry) return res.status(404).json({ message: 'Entry not found or invalid data' })
+    return res.json({ entry })
+  })
+
+  app.delete('/api/habits/:habitId/entries/:date/:entryId', requireAuth, async (req, res) => {
+    if (!isValidDateString(req.params.date)) {
+      return res.status(400).json({ message: 'Date must use YYYY-MM-DD format' })
+    }
+    const removed = await deleteEntryById({
+      userId: req.auth.userId,
+      habitId: req.params.habitId,
+      date: req.params.date,
+      entryId: req.params.entryId,
     })
     if (!removed) return res.status(404).json({ message: 'Entry not found' })
     return res.status(204).send()
   })
 
-  app.get('/api/habits/:habitId/entries/:date/images', requireAuth, async (req, res) => {
+  app.get('/api/habits/:habitId/entries/:date/:entryId/images', requireAuth, async (req, res) => {
     if (!isValidDateString(req.params.date)) {
       return res.status(400).json({ message: 'Date must use YYYY-MM-DD format' })
     }
@@ -243,8 +314,9 @@ export const createApp = () => {
       userId: req.auth.userId,
       habitId: req.params.habitId,
       date: req.params.date,
+      entryId: req.params.entryId,
     })
-    if (images === null) return res.status(404).json({ message: 'Habit not found' })
+    if (images === null) return res.status(404).json({ message: 'Entry not found' })
     return res.json({ images })
   })
 
@@ -258,39 +330,76 @@ export const createApp = () => {
     return res.json({ visions })
   })
 
-  app.put('/api/habits/:habitId/visions/:date', requireAuth, async (req, res) => {
+  app.get('/api/habits/:habitId/visions/:date', requireAuth, async (req, res) => {
+    if (!isValidDateString(req.params.date)) {
+      return res.status(400).json({ message: 'Date must use YYYY-MM-DD format' })
+    }
+    const visions = await listVisionsForDate({
+      userId: req.auth.userId,
+      habitId: req.params.habitId,
+      date: req.params.date,
+    })
+    if (visions === null) return res.status(404).json({ message: 'Habit not found' })
+    return res.json({ visions })
+  })
+
+  app.post('/api/habits/:habitId/visions/:date', requireAuth, async (req, res) => {
     if (!isValidDateString(req.params.date)) {
       return res.status(400).json({ message: 'Date must use YYYY-MM-DD format' })
     }
     const title = String(req.body?.title ?? '').trim()
     const description = String(req.body?.description ?? '')
+    const customColor = String(req.body?.customColor ?? '').trim() || null
     if (!title) return res.status(400).json({ message: 'Vision title is required' })
-    const vision = await upsertVision({
+    const vision = await createVision({
       userId: req.auth.userId,
       habitId: req.params.habitId,
       date: req.params.date,
       title,
       description,
+      customColor,
     })
     if (!vision) return res.status(404).json({ message: 'Habit not found' })
-    return res.json({ vision })
+    return res.status(201).json({ vision })
   })
 
-  app.delete('/api/habits/:habitId/visions/:date', requireAuth, async (req, res) => {
+  app.patch('/api/habits/:habitId/visions/:date/:visionId', requireAuth, async (req, res) => {
     if (!isValidDateString(req.params.date)) {
       return res.status(400).json({ message: 'Date must use YYYY-MM-DD format' })
     }
-    const removed = await deleteVision({
+    const title = String(req.body?.title ?? '').trim()
+    const description = String(req.body?.description ?? '')
+    const customColor = String(req.body?.customColor ?? '').trim() || null
+    if (!title) return res.status(400).json({ message: 'Vision title is required' })
+    const vision = await updateVision({
       userId: req.auth.userId,
       habitId: req.params.habitId,
       date: req.params.date,
+      visionId: req.params.visionId,
+      title,
+      description,
+      customColor,
+    })
+    if (!vision) return res.status(404).json({ message: 'Vision not found' })
+    return res.json({ vision })
+  })
+
+  app.delete('/api/habits/:habitId/visions/:date/:visionId', requireAuth, async (req, res) => {
+    if (!isValidDateString(req.params.date)) {
+      return res.status(400).json({ message: 'Date must use YYYY-MM-DD format' })
+    }
+    const removed = await deleteVisionById({
+      userId: req.auth.userId,
+      habitId: req.params.habitId,
+      date: req.params.date,
+      visionId: req.params.visionId,
     })
     if (!removed) return res.status(404).json({ message: 'Vision not found' })
     return res.status(204).send()
   })
 
   app.post(
-    '/api/habits/:habitId/entries/:date/images',
+    '/api/habits/:habitId/entries/:date/:entryId/images',
     requireAuth,
     upload.single('image'),
     async (req, res) => {
@@ -298,23 +407,25 @@ export const createApp = () => {
         return res.status(400).json({ message: 'Date must use YYYY-MM-DD format' })
       }
       if (!req.file) return res.status(400).json({ message: 'Image file is required' })
+      const uploadResult = await saveUploadedFile({ file: req.file, prefix: 'entry' })
 
       const image = await addEntryImage({
         userId: req.auth.userId,
         habitId: req.params.habitId,
         date: req.params.date,
-        storageKey: req.file.filename,
-        url: `/uploads/${req.file.filename}`,
+        entryId: req.params.entryId,
+        storageKey: uploadResult.storageKey,
+        url: uploadResult.url,
         originalName: req.file.originalname,
         mimeType: req.file.mimetype,
         fileSize: req.file.size,
       })
-      if (image === null) return res.status(404).json({ message: 'Habit not found' })
+      if (image === null) return res.status(404).json({ message: 'Entry not found' })
       return res.status(201).json({ image })
     },
   )
 
-  app.delete('/api/habits/:habitId/entries/:date/images/:imageId', requireAuth, async (req, res) => {
+  app.delete('/api/habits/:habitId/entries/:date/:entryId/images/:imageId', requireAuth, async (req, res) => {
     if (!isValidDateString(req.params.date)) {
       return res.status(400).json({ message: 'Date must use YYYY-MM-DD format' })
     }
@@ -322,15 +433,16 @@ export const createApp = () => {
       userId: req.auth.userId,
       habitId: req.params.habitId,
       date: req.params.date,
+      entryId: req.params.entryId,
       imageId: req.params.imageId,
     })
     if (!image) return res.status(404).json({ message: 'Image not found' })
 
-    await fs.unlink(path.join(uploadsDir, image.storageKey)).catch(() => {})
+    await deleteStoredFile(image.storageKey)
     return res.status(204).send()
   })
 
-  app.get('/api/habits/:habitId/visions/:date/images', requireAuth, async (req, res) => {
+  app.get('/api/habits/:habitId/visions/:date/:visionId/images', requireAuth, async (req, res) => {
     if (!isValidDateString(req.params.date)) {
       return res.status(400).json({ message: 'Date must use YYYY-MM-DD format' })
     }
@@ -338,13 +450,14 @@ export const createApp = () => {
       userId: req.auth.userId,
       habitId: req.params.habitId,
       date: req.params.date,
+      visionId: req.params.visionId,
     })
-    if (images === null) return res.status(404).json({ message: 'Habit not found' })
+    if (images === null) return res.status(404).json({ message: 'Vision not found' })
     return res.json({ images })
   })
 
   app.post(
-    '/api/habits/:habitId/visions/:date/images',
+    '/api/habits/:habitId/visions/:date/:visionId/images',
     requireAuth,
     upload.single('image'),
     async (req, res) => {
@@ -352,12 +465,14 @@ export const createApp = () => {
         return res.status(400).json({ message: 'Date must use YYYY-MM-DD format' })
       }
       if (!req.file) return res.status(400).json({ message: 'Image file is required' })
+      const uploadResult = await saveUploadedFile({ file: req.file, prefix: 'vision' })
       const image = await addVisionImage({
         userId: req.auth.userId,
         habitId: req.params.habitId,
         date: req.params.date,
-        storageKey: req.file.filename,
-        url: `/uploads/${req.file.filename}`,
+        visionId: req.params.visionId,
+        storageKey: uploadResult.storageKey,
+        url: uploadResult.url,
         originalName: req.file.originalname,
         mimeType: req.file.mimetype,
         fileSize: req.file.size,
@@ -367,7 +482,7 @@ export const createApp = () => {
     },
   )
 
-  app.delete('/api/habits/:habitId/visions/:date/images/:imageId', requireAuth, async (req, res) => {
+  app.delete('/api/habits/:habitId/visions/:date/:visionId/images/:imageId', requireAuth, async (req, res) => {
     if (!isValidDateString(req.params.date)) {
       return res.status(400).json({ message: 'Date must use YYYY-MM-DD format' })
     }
@@ -375,10 +490,11 @@ export const createApp = () => {
       userId: req.auth.userId,
       habitId: req.params.habitId,
       date: req.params.date,
+      visionId: req.params.visionId,
       imageId: req.params.imageId,
     })
     if (!image) return res.status(404).json({ message: 'Vision image not found' })
-    await fs.unlink(path.join(uploadsDir, image.storageKey)).catch(() => {})
+    await deleteStoredFile(image.storageKey)
     return res.status(204).send()
   })
 
@@ -402,7 +518,7 @@ export const createApp = () => {
 }
 
 export const startServer = async ({ port = config.apiPort, log = true } = {}) => {
-  await fs.mkdir(uploadsDir, { recursive: true })
+  await initStorage()
   await initSchema()
   const app = createApp()
   const server = await new Promise((resolve) => {

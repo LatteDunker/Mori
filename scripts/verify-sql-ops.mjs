@@ -5,30 +5,37 @@ import { startServer, stopServer } from '../server/index.mjs'
 import {
   addEntryImage,
   addVisionImage,
+  archiveHabit,
+  createEntry,
   createHabit,
   createUser,
+  createVision,
   clearUserProfileImage,
+  deleteEntryById,
   deleteEntryImage,
-  deleteVision,
+  deleteVisionById,
   deleteVisionImage,
   deleteUserByEmail,
-  deleteEntry,
   deleteHabit,
   findUserByEmail,
   findUserById,
   initSchema,
   isTokenRevoked,
   listEntryImages,
+  listEntriesForDate,
   listEntriesForYear,
   listHabits,
+  listArchivedHabits,
   listVisionImages,
+  listVisionsForDate,
   listVisionsForYear,
   reorderHabits,
   revokeToken,
+  restoreHabit,
   setUserProfileImage,
   updateHabit,
-  upsertVision,
-  upsertEntry,
+  updateEntry,
+  updateVision,
 } from '../server/repository.mjs'
 
 const log = (step, value) => {
@@ -69,6 +76,18 @@ const request = async (baseUrl, path, { method = 'GET', token, body } = {}) => {
   }
   log(`endpoint ${method} ${path}`, { status: response.status, payload })
   return { status: response.status, payload }
+}
+
+const requestBinary = async (baseUrl, path) => {
+  const response = await fetch(`${baseUrl}${path}`)
+  const bytes = await response.arrayBuffer()
+  const result = {
+    status: response.status,
+    byteLength: bytes.byteLength,
+    contentType: response.headers.get('content-type') ?? '',
+  }
+  log(`binary GET ${path}`, result)
+  return result
 }
 
 const runRepositoryChecks = async () => {
@@ -114,6 +133,24 @@ const runRepositoryChecks = async () => {
   assert(ownHabits.length === 2, 'listHabits should only return own habits', ownHabits)
   assert(otherHabits.length === 1, 'other user should have isolated habits', otherHabits)
 
+  const archivedSecondHabit = await archiveHabit({ userId: user.id, habitId: secondHabit.id })
+  assert(archivedSecondHabit?.id === secondHabit.id, 'archiveHabit should move habit out of active list', archivedSecondHabit)
+  const activeAfterArchive = await listHabits(user.id)
+  const archivedAfterArchive = await listArchivedHabits(user.id)
+  assert(activeAfterArchive.length === 1 && activeAfterArchive[0]?.id === habit.id, 'active habits should hide archived habits', activeAfterArchive)
+  assert(
+    archivedAfterArchive.length === 1 && archivedAfterArchive[0]?.id === secondHabit.id,
+    'listArchivedHabits should return archived habits',
+    archivedAfterArchive,
+  )
+
+  const restoredSecondHabit = await restoreHabit({ userId: user.id, habitId: secondHabit.id })
+  assert(restoredSecondHabit?.id === secondHabit.id, 'restoreHabit should return archived habit to active list', restoredSecondHabit)
+  const activeAfterRestore = await listHabits(user.id)
+  const archivedAfterRestore = await listArchivedHabits(user.id)
+  assert(activeAfterRestore.length === 2, 'active habits should include restored habit', activeAfterRestore)
+  assert(archivedAfterRestore.length === 0, 'archived habits should be empty after restore', archivedAfterRestore)
+
   const reorderedHabits = await reorderHabits({ userId: user.id, habitIds: [secondHabit.id, habit.id] })
   assert(
     Array.isArray(reorderedHabits) &&
@@ -136,29 +173,49 @@ const runRepositoryChecks = async () => {
     updatedHabit,
   )
 
-  const firstEntry = await upsertEntry({
+  const firstEntry = await createEntry({
     userId: user.id,
     habitId: habit.id,
     date: testDateA,
     completed: true,
     note: '',
+    customColor: '#22c55e',
   })
-  const secondEntry = await upsertEntry({
+  const secondEntry = await createEntry({
     userId: user.id,
     habitId: habit.id,
     date: testDateB,
     completed: false,
     note: 'Repository method note',
+    customColor: '#2563eb',
   })
-  log('entries upserted via repository', { firstEntry, secondEntry })
+  log('entries created via repository', { firstEntry, secondEntry })
+  assert(firstEntry?.customColor === '#22c55e', 'createEntry should persist custom entry color', firstEntry)
+  assert(secondEntry?.customColor === '#2563eb', 'createEntry should persist custom entry color', secondEntry)
+
+  const updatedSecondEntry = await updateEntry({
+    userId: user.id,
+    habitId: habit.id,
+    date: testDateB,
+    entryId: secondEntry.id,
+    completed: true,
+    note: 'Updated repository method note',
+    customColor: '#f59e0b',
+  })
+  assert(updatedSecondEntry?.customColor === '#f59e0b', 'updateEntry should update custom color', updatedSecondEntry)
 
   const ownEntries = await listEntriesForYear({ userId: user.id, habitId: habit.id, year })
   assert(Array.isArray(ownEntries) && ownEntries.length === 2, 'listEntriesForYear should return 2 rows', ownEntries)
+  const ownEntryA = ownEntries.find((entry) => entry.date === testDateA)
+  assert(ownEntryA?.customColor === '#22c55e', 'listEntriesForYear should include custom entry color', ownEntryA)
+  const entriesOnDateA = await listEntriesForDate({ userId: user.id, habitId: habit.id, date: testDateA })
+  assert(Array.isArray(entriesOnDateA) && entriesOnDateA.length === 1, 'listEntriesForDate should list entries for a day', entriesOnDateA)
 
   const repoImageA = await addEntryImage({
     userId: user.id,
     habitId: habit.id,
     date: testDateA,
+    entryId: firstEntry.id,
     storageKey: 'repo-image-a.png',
     url: '/uploads/repo-image-a.png',
     originalName: 'repo-image-a.png',
@@ -167,7 +224,7 @@ const runRepositoryChecks = async () => {
   })
   assert(Boolean(repoImageA?.id), 'addEntryImage should create metadata row', repoImageA)
 
-  const imageRows = await listEntryImages({ userId: user.id, habitId: habit.id, date: testDateA })
+  const imageRows = await listEntryImages({ userId: user.id, habitId: habit.id, date: testDateA, entryId: firstEntry.id })
   assert(Array.isArray(imageRows) && imageRows.length === 1, 'listEntryImages should return uploaded image', imageRows)
 
   const entriesWithImages = await listEntriesForYear({ userId: user.id, habitId: habit.id, year })
@@ -178,29 +235,47 @@ const runRepositoryChecks = async () => {
     userId: user.id,
     habitId: habit.id,
     date: testDateA,
+    entryId: firstEntry.id,
     imageId: repoImageA.id,
   })
   assert(removedImage?.id === repoImageA.id, 'deleteEntryImage should remove inserted image row', removedImage)
 
-  const imagesAfterDelete = await listEntryImages({ userId: user.id, habitId: habit.id, date: testDateA })
+  const imagesAfterDelete = await listEntryImages({ userId: user.id, habitId: habit.id, date: testDateA, entryId: firstEntry.id })
   assert(Array.isArray(imagesAfterDelete) && imagesAfterDelete.length === 0, 'image rows should be empty after delete', imagesAfterDelete)
 
-  const vision = await upsertVision({
+  const vision = await createVision({
     userId: user.id,
     habitId: habit.id,
     date: testDateA,
     title: 'Run half marathon',
     description: 'Confident finish and pace control',
+    customColor: '#7c3aed',
   })
-  assert(Boolean(vision?.id), 'upsertVision should create a row', vision)
+  assert(Boolean(vision?.id), 'createVision should create a row', vision)
+  assert(vision?.customColor === '#7c3aed', 'createVision should persist custom vision color', vision)
+
+  const updatedVision = await updateVision({
+    userId: user.id,
+    habitId: habit.id,
+    date: testDateA,
+    visionId: vision.id,
+    title: 'Run full marathon',
+    description: 'Confident finish and pace control',
+    customColor: '#4f46e5',
+  })
+  assert(updatedVision?.customColor === '#4f46e5', 'updateVision should update custom vision color', updatedVision)
 
   const visions = await listVisionsForYear({ userId: user.id, habitId: habit.id, year })
   assert(Array.isArray(visions) && visions.length === 1, 'listVisionsForYear should return one row', visions)
+  assert(visions[0]?.customColor === '#4f46e5', 'listVisionsForYear should include custom vision color', visions[0])
+  const visionsOnDateA = await listVisionsForDate({ userId: user.id, habitId: habit.id, date: testDateA })
+  assert(Array.isArray(visionsOnDateA) && visionsOnDateA.length === 1, 'listVisionsForDate should list visions for a day', visionsOnDateA)
 
   const visionImage = await addVisionImage({
     userId: user.id,
     habitId: habit.id,
     date: testDateA,
+    visionId: vision.id,
     storageKey: 'repo-vision-image.png',
     url: '/uploads/repo-vision-image.png',
     originalName: 'repo-vision-image.png',
@@ -209,7 +284,7 @@ const runRepositoryChecks = async () => {
   })
   assert(Boolean(visionImage?.id), 'addVisionImage should create metadata row', visionImage)
 
-  const visionImageRows = await listVisionImages({ userId: user.id, habitId: habit.id, date: testDateA })
+  const visionImageRows = await listVisionImages({ userId: user.id, habitId: habit.id, date: testDateA, visionId: vision.id })
   assert(
     Array.isArray(visionImageRows) && visionImageRows.length === 1,
     'listVisionImages should return inserted row',
@@ -220,24 +295,25 @@ const runRepositoryChecks = async () => {
     userId: user.id,
     habitId: habit.id,
     date: testDateA,
+    visionId: vision.id,
     imageId: visionImage.id,
   })
   assert(removedVisionImage?.id === visionImage.id, 'deleteVisionImage should remove inserted row', removedVisionImage)
 
-  const visionDeleted = await deleteVision({ userId: user.id, habitId: habit.id, date: testDateA })
-  assert(visionDeleted, 'deleteVision should remove vision row', { visionDeleted })
+  const visionDeleted = await deleteVisionById({ userId: user.id, habitId: habit.id, date: testDateA, visionId: vision.id })
+  assert(visionDeleted, 'deleteVisionById should remove vision row', { visionDeleted })
 
-  const forbiddenUpsert = await upsertEntry({
+  const forbiddenCreateEntry = await createEntry({
     userId: otherUser.id,
     habitId: habit.id,
     date: testDateA,
     completed: true,
     note: 'Should fail',
   })
-  assert(forbiddenUpsert === null, 'upsertEntry should reject cross-user habit access', forbiddenUpsert)
+  assert(forbiddenCreateEntry === null, 'createEntry should reject cross-user habit access', forbiddenCreateEntry)
 
-  const deletedEntry = await deleteEntry({ userId: user.id, habitId: habit.id, date: testDateB })
-  assert(deletedEntry, 'deleteEntry should remove own entry', { deletedEntry })
+  const deletedEntry = await deleteEntryById({ userId: user.id, habitId: habit.id, date: testDateB, entryId: secondEntry.id })
+  assert(deletedEntry, 'deleteEntryById should remove own entry', { deletedEntry })
 
   const jti = randomUUID()
   await revokeToken({
@@ -304,6 +380,13 @@ const runEndpointChecks = async () => {
       'profile image upload endpoint should return user with profileImageUrl',
       uploadProfileImageResponse,
     )
+    const profileImageUrl = uploadProfileImageResponse.payload.user.profileImageUrl
+    const profileImageFetch = await requestBinary(baseUrl, profileImageUrl)
+    assert(
+      profileImageFetch.status === 200 && profileImageFetch.byteLength > 0,
+      'uploaded profile image url should be directly fetchable',
+      profileImageFetch,
+    )
 
     const meAfterProfileUpload = await request(baseUrl, '/api/auth/me', { token })
     assert(
@@ -366,6 +449,61 @@ const runEndpointChecks = async () => {
       habitsAfterReorder,
     )
 
+    const archiveHabitResponse = await request(baseUrl, `/api/habits/${habitIdTwo}/archive`, {
+      method: 'POST',
+      token,
+    })
+    assert(
+      archiveHabitResponse.status === 200 && archiveHabitResponse.payload?.habit?.id === habitIdTwo,
+      'archive habit endpoint should move habit to archive collection',
+      archiveHabitResponse,
+    )
+
+    const activeHabitsAfterArchive = await request(baseUrl, '/api/habits', { token })
+    assert(
+      activeHabitsAfterArchive.status === 200 &&
+        Array.isArray(activeHabitsAfterArchive.payload?.habits) &&
+        activeHabitsAfterArchive.payload.habits.length === 1 &&
+        activeHabitsAfterArchive.payload.habits[0]?.id === habitId,
+      'list habits should exclude archived habits',
+      activeHabitsAfterArchive,
+    )
+
+    const archivedHabitsResponse = await request(baseUrl, '/api/habits/archive', { token })
+    assert(
+      archivedHabitsResponse.status === 200 &&
+        Array.isArray(archivedHabitsResponse.payload?.habits) &&
+        archivedHabitsResponse.payload.habits.length === 1 &&
+        archivedHabitsResponse.payload.habits[0]?.id === habitIdTwo,
+      'list archived habits endpoint should include archived habit',
+      archivedHabitsResponse,
+    )
+
+    const restoreHabitResponse = await request(baseUrl, `/api/habits/${habitIdTwo}/restore`, {
+      method: 'POST',
+      token,
+    })
+    assert(
+      restoreHabitResponse.status === 200 && restoreHabitResponse.payload?.habit?.id === habitIdTwo,
+      'restore habit endpoint should return habit to active list',
+      restoreHabitResponse,
+    )
+
+    const archivedAfterRestoreResponse = await request(baseUrl, '/api/habits/archive', { token })
+    assert(
+      archivedAfterRestoreResponse.status === 200 &&
+        Array.isArray(archivedAfterRestoreResponse.payload?.habits) &&
+        archivedAfterRestoreResponse.payload.habits.length === 0,
+      'archive list should be empty after restoring the habit',
+      archivedAfterRestoreResponse,
+    )
+
+    const deleteRestoredHabit = await request(baseUrl, `/api/habits/${habitIdTwo}`, {
+      method: 'DELETE',
+      token,
+    })
+    assert(deleteRestoredHabit.status === 204, 'delete endpoint should delete restored habits', deleteRestoredHabit)
+
     const updateHabitResponse = await request(baseUrl, `/api/habits/${habitId}`, {
       method: 'PATCH',
       token,
@@ -380,19 +518,31 @@ const runEndpointChecks = async () => {
       updateHabitResponse,
     )
 
-    const upsertA = await request(baseUrl, `/api/habits/${habitId}/entries/${dateA}`, {
-      method: 'PUT',
+    const createEntryA = await request(baseUrl, `/api/habits/${habitId}/entries/${dateA}`, {
+      method: 'POST',
       token,
-      body: { completed: true, note: '' },
+      body: { completed: true, note: '', customColor: '#14b8a6' },
     })
-    assert(upsertA.status === 200, 'upsert entry should return 200', upsertA)
+    assert(createEntryA.status === 201, 'create entry should return 201', createEntryA)
+    assert(createEntryA.payload?.entry?.customColor === '#14b8a6', 'entry endpoint should persist custom color', createEntryA)
+    const entryAId = createEntryA.payload?.entry?.id
 
-    const upsertB = await request(baseUrl, `/api/habits/${habitId}/entries/${dateB}`, {
-      method: 'PUT',
+    const createEntryB = await request(baseUrl, `/api/habits/${habitId}/entries/${dateB}`, {
+      method: 'POST',
       token,
-      body: { completed: false, note: 'API flow note' },
+      body: { completed: false, note: 'API flow note', customColor: '#ea580c' },
     })
-    assert(upsertB.status === 200, 'upsert note entry should return 200', upsertB)
+    assert(createEntryB.status === 201, 'create note entry should return 201', createEntryB)
+    assert(createEntryB.payload?.entry?.customColor === '#ea580c', 'entry endpoint should persist custom color', createEntryB)
+    const entryBId = createEntryB.payload?.entry?.id
+
+    const updateEntryB = await request(baseUrl, `/api/habits/${habitId}/entries/${dateB}/${entryBId}`, {
+      method: 'PATCH',
+      token,
+      body: { completed: true, note: 'API flow note updated', customColor: '#fb7185' },
+    })
+    assert(updateEntryB.status === 200, 'update entry should return 200', updateEntryB)
+    assert(updateEntryB.payload?.entry?.customColor === '#fb7185', 'update entry should persist new custom color', updateEntryB)
 
     const listEntries = await request(baseUrl, `/api/habits/${habitId}/entries?year=${year}`, { token })
     assert(
@@ -400,13 +550,41 @@ const runEndpointChecks = async () => {
       'list entries endpoint should return 2 rows',
       listEntries,
     )
+    const listedEntryA = listEntries.payload.entries.find((entry) => entry.date === dateA)
+    assert(listedEntryA?.customColor === '#14b8a6', 'list entries endpoint should return customColor', listedEntryA)
+    const listEntriesForDateA = await request(baseUrl, `/api/habits/${habitId}/entries/${dateA}`, { token })
+    assert(
+      listEntriesForDateA.status === 200 &&
+        Array.isArray(listEntriesForDateA.payload?.entries) &&
+        listEntriesForDateA.payload.entries.length === 1,
+      'list entries by date endpoint should return day cards',
+      listEntriesForDateA,
+    )
 
-    const upsertVisionResponse = await request(baseUrl, `/api/habits/${habitId}/visions/${dateA}`, {
-      method: 'PUT',
+    const createVisionResponse = await request(baseUrl, `/api/habits/${habitId}/visions/${dateA}`, {
+      method: 'POST',
       token,
-      body: { title: 'Launch my coaching site', description: 'Landing page, payment flow, first clients' },
+      body: { title: 'Launch my coaching site', description: 'Landing page, payment flow, first clients', customColor: '#9333ea' },
     })
-    assert(upsertVisionResponse.status === 200, 'upsert vision endpoint should return 200', upsertVisionResponse)
+    assert(createVisionResponse.status === 201, 'create vision endpoint should return 201', createVisionResponse)
+    assert(
+      createVisionResponse.payload?.vision?.customColor === '#9333ea',
+      'vision endpoint should persist custom color',
+      createVisionResponse,
+    )
+    const visionId = createVisionResponse.payload?.vision?.id
+
+    const updateVisionResponse = await request(baseUrl, `/api/habits/${habitId}/visions/${dateA}/${visionId}`, {
+      method: 'PATCH',
+      token,
+      body: { title: 'Launch my coaching site updated', description: 'Landing page updated', customColor: '#7c3aed' },
+    })
+    assert(updateVisionResponse.status === 200, 'update vision endpoint should return 200', updateVisionResponse)
+    assert(
+      updateVisionResponse.payload?.vision?.customColor === '#7c3aed',
+      'update vision endpoint should persist new custom color',
+      updateVisionResponse,
+    )
 
     const listVisionsResponse = await request(baseUrl, `/api/habits/${habitId}/visions?year=${year}`, { token })
     assert(
@@ -416,10 +594,23 @@ const runEndpointChecks = async () => {
       'list visions endpoint should return one row',
       listVisionsResponse,
     )
+    assert(
+      listVisionsResponse.payload.visions[0]?.customColor === '#7c3aed',
+      'list visions endpoint should return customColor',
+      listVisionsResponse.payload.visions[0],
+    )
+    const listVisionsForDateA = await request(baseUrl, `/api/habits/${habitId}/visions/${dateA}`, { token })
+    assert(
+      listVisionsForDateA.status === 200 &&
+        Array.isArray(listVisionsForDateA.payload?.visions) &&
+        listVisionsForDateA.payload.visions.length === 1,
+      'list visions by date endpoint should return day cards',
+      listVisionsForDateA,
+    )
 
     const imageForm = new FormData()
     imageForm.append('image', new Blob(['fakepng'], { type: 'image/png' }), 'api-image.png')
-    const uploadImage = await request(baseUrl, `/api/habits/${habitId}/entries/${dateA}/images`, {
+    const uploadImage = await request(baseUrl, `/api/habits/${habitId}/entries/${dateA}/${entryAId}/images`, {
       method: 'POST',
       token,
       body: imageForm,
@@ -427,8 +618,12 @@ const runEndpointChecks = async () => {
     assert(uploadImage.status === 201, 'image upload endpoint should return 201', uploadImage)
     const imageId = uploadImage.payload?.image?.id
     assert(Boolean(imageId), 'image upload should return image id', uploadImage.payload)
+    const entryImageUrl = uploadImage.payload?.image?.url
+    assert(typeof entryImageUrl === 'string' && entryImageUrl.startsWith('/uploads/'), 'entry image should include uploads url', uploadImage)
+    const entryImageFetch = await requestBinary(baseUrl, entryImageUrl)
+    assert(entryImageFetch.status === 200 && entryImageFetch.byteLength > 0, 'entry image url should be fetchable', entryImageFetch)
 
-    const listImages = await request(baseUrl, `/api/habits/${habitId}/entries/${dateA}/images`, { token })
+    const listImages = await request(baseUrl, `/api/habits/${habitId}/entries/${dateA}/${entryAId}/images`, { token })
     assert(
       listImages.status === 200 &&
         Array.isArray(listImages.payload?.images) &&
@@ -440,7 +635,7 @@ const runEndpointChecks = async () => {
     const oversizedPayload = new Uint8Array(8 * 1024 * 1024 + 10)
     const tooLargeForm = new FormData()
     tooLargeForm.append('image', new Blob([oversizedPayload], { type: 'image/jpeg' }), 'too-large.jpg')
-    const tooLargeUpload = await request(baseUrl, `/api/habits/${habitId}/entries/${dateA}/images`, {
+    const tooLargeUpload = await request(baseUrl, `/api/habits/${habitId}/entries/${dateA}/${entryAId}/images`, {
       method: 'POST',
       token,
       body: tooLargeForm,
@@ -449,7 +644,7 @@ const runEndpointChecks = async () => {
 
     const deleteImageResponse = await request(
       baseUrl,
-      `/api/habits/${habitId}/entries/${dateA}/images/${imageId}`,
+      `/api/habits/${habitId}/entries/${dateA}/${entryAId}/images/${imageId}`,
       {
         method: 'DELETE',
         token,
@@ -459,15 +654,27 @@ const runEndpointChecks = async () => {
 
     const visionImageForm = new FormData()
     visionImageForm.append('image', new Blob(['fakevision'], { type: 'image/png' }), 'vision-image.png')
-    const uploadVisionImageResponse = await request(baseUrl, `/api/habits/${habitId}/visions/${dateA}/images`, {
+    const uploadVisionImageResponse = await request(baseUrl, `/api/habits/${habitId}/visions/${dateA}/${visionId}/images`, {
       method: 'POST',
       token,
       body: visionImageForm,
     })
     assert(uploadVisionImageResponse.status === 201, 'vision image upload should return 201', uploadVisionImageResponse)
     const visionImageId = uploadVisionImageResponse.payload?.image?.id
+    const visionImageUrl = uploadVisionImageResponse.payload?.image?.url
+    assert(
+      typeof visionImageUrl === 'string' && visionImageUrl.startsWith('/uploads/'),
+      'vision image should include uploads url',
+      uploadVisionImageResponse,
+    )
+    const visionImageFetch = await requestBinary(baseUrl, visionImageUrl)
+    assert(
+      visionImageFetch.status === 200 && visionImageFetch.byteLength > 0,
+      'vision image url should be fetchable',
+      visionImageFetch,
+    )
 
-    const listVisionImagesResponse = await request(baseUrl, `/api/habits/${habitId}/visions/${dateA}/images`, { token })
+    const listVisionImagesResponse = await request(baseUrl, `/api/habits/${habitId}/visions/${dateA}/${visionId}/images`, { token })
     assert(
       listVisionImagesResponse.status === 200 &&
         Array.isArray(listVisionImagesResponse.payload?.images) &&
@@ -478,7 +685,7 @@ const runEndpointChecks = async () => {
 
     const deleteVisionImageResponse = await request(
       baseUrl,
-      `/api/habits/${habitId}/visions/${dateA}/images/${visionImageId}`,
+      `/api/habits/${habitId}/visions/${dateA}/${visionId}/images/${visionImageId}`,
       {
         method: 'DELETE',
         token,
@@ -486,13 +693,13 @@ const runEndpointChecks = async () => {
     )
     assert(deleteVisionImageResponse.status === 204, 'delete vision image endpoint should return 204', deleteVisionImageResponse)
 
-    const deleteVisionResponse = await request(baseUrl, `/api/habits/${habitId}/visions/${dateA}`, {
+    const deleteVisionResponse = await request(baseUrl, `/api/habits/${habitId}/visions/${dateA}/${visionId}`, {
       method: 'DELETE',
       token,
     })
     assert(deleteVisionResponse.status === 204, 'delete vision endpoint should return 204', deleteVisionResponse)
 
-    const deleteEntryResponse = await request(baseUrl, `/api/habits/${habitId}/entries/${dateB}`, {
+    const deleteEntryResponse = await request(baseUrl, `/api/habits/${habitId}/entries/${dateB}/${entryBId}`, {
       method: 'DELETE',
       token,
     })

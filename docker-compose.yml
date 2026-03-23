@@ -1,0 +1,69 @@
+services:
+  mysql:
+    image: mysql:8
+    env_file:
+      - ${COMPOSE_ENV_FILE:-.env.development}
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+    # Host 3307 avoids clashing with Homebrew / local MySQL on 3306
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - app_net
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'mysqladmin ping -h 127.0.0.1 -uroot -p"$$MYSQL_ROOT_PASSWORD" || exit 1',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  minio:
+    image: minio/minio:latest
+    env_file:
+      - ${COMPOSE_ENV_FILE:-.env.development}
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    command: server /data --console-address ":9001"
+    # Host 9100/9101 matches common local MinIO layout; avoids :9000 conflicts with other stacks
+    ports:
+      - "9100:9000"
+      - "9101:9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - app_net
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - ${COMPOSE_ENV_FILE:-.env.development}
+    environment:
+      DB_HOST: mysql
+      MINIO_ENDPOINT: minio
+    ports:
+      - "4000:4000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    networks:
+      - app_net
+
+volumes:
+  mysql_data:
+  minio_data:
+
+networks:
+  app_net:
+    driver: bridge

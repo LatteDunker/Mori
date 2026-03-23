@@ -1,3 +1,19 @@
+Drag and drop upload images
+Image previews and loading show as image is uploading and after uploaded
+Expand image from events view
+Search for content within cells
+Add per habit tags for events
+Add ability to add single event to multiple habits
+
+
+
+
+
+
+
+
+
+
 Grey out days that have already passed that have no progress for visual indication of how much of the year has passed.
 A small indicator signaling the current day for time awareness
 A calendar view similar to the sidebar calendar on Google Calendar so I can see the number for each day of the month
